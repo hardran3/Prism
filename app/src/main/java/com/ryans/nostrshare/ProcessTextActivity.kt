@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
@@ -139,6 +140,14 @@ class ProcessTextActivity : ComponentActivity() {
         LaunchedEffect(Unit) {
             focusRequester.requestFocus()
         }
+
+        // Close on success
+        LaunchedEffect(vm.publishSuccess) {
+            if (vm.publishSuccess == true) {
+                 Toast.makeText(this@ProcessTextActivity, vm.publishStatus, Toast.LENGTH_SHORT).show()
+                 finish()
+            }
+        }
         
         Scaffold(
             topBar = {
@@ -146,7 +155,7 @@ class ProcessTextActivity : ComponentActivity() {
                     title = { Text(title) },
                     actions = {
                         // Toggle Mode Action
-                        IconButton(onClick = { vm.isHighlightMode = !vm.isHighlightMode }) {
+                        IconButton(onClick = { vm.toggleMode() }) {
                              Icon(
                                  imageVector = if (vm.isHighlightMode) androidx.compose.material.icons.Icons.Default.Lightbulb else androidx.compose.material.icons.Icons.Default.Edit,
                                  contentDescription = "Toggle Mode",
@@ -193,8 +202,13 @@ class ProcessTextActivity : ComponentActivity() {
                 } else {
                     BottomAppBar(
                         actions = {
-                            // Link Icon / Field toggle could go here, but for now let's keep it simple.
-                            // Maybe just a character count later?
+                            if (vm.publishSuccess == false) {
+                                Text(
+                                    text = "Failed. Retry?", 
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(start = 16.dp)
+                                )
+                            }
                         },
                         floatingActionButton = {
                             FloatingActionButton(
@@ -224,11 +238,11 @@ class ProcessTextActivity : ComponentActivity() {
                                         )
                                     }
                                 },
-                                containerColor = BottomAppBarDefaults.bottomAppBarFabColor,
+                                containerColor = if (vm.publishSuccess == false) MaterialTheme.colorScheme.errorContainer else BottomAppBarDefaults.bottomAppBarFabColor,
                                 elevation = FloatingActionButtonDefaults.bottomAppBarFabElevation()
                             ) {
                                 Icon(
-                                    imageVector = Icons.Filled.Send, 
+                                    imageVector = if (vm.publishSuccess == false) androidx.compose.material.icons.Icons.Default.Refresh else Icons.Filled.Send, 
                                     contentDescription = "Post" 
                                 )
                             }

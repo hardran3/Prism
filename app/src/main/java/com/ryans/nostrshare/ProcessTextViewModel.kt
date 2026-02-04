@@ -95,8 +95,11 @@ class ProcessTextViewModel : ViewModel() {
         sourceUrl = newSource
     }
 
+    var publishSuccess by mutableStateOf<Boolean?>(null) // null = idle/publishing, true = success, false = failed
+
     fun onSignedEventReceived(signedEventJson: String) {
         isPublishing = true
+        publishSuccess = null
         publishStatus = "Fetching relay list..."
         viewModelScope.launch {
             try {
@@ -125,23 +128,51 @@ class ProcessTextViewModel : ViewModel() {
                 }
                 
                 val successCount = results.count { entry -> entry.value }
-                publishStatus = if (successCount > 0) {
-                    "Success! Published to $successCount / ${results.size} relays."
+                delay(1000) // Small delay to let user see "Broadcasting..."
+                
+                if (successCount > 0) {
+                    publishStatus = "Success! Published to $successCount / ${results.size} relays."
+                    publishSuccess = true
                 } else {
-                    "Failed to publish to any of ${results.size} relays."
+                    publishStatus = "Failed to publish to any of ${results.size} relays."
+                    publishSuccess = false
                 }
                 
-                delay(2000)
                 isPublishing = false
             } catch (e: Exception) {
                 publishStatus = "Error: ${e.message}"
-                delay(3000)
+                publishSuccess = false
                 isPublishing = false
             }
         }
     }
 
     var isHighlightMode by mutableStateOf(true) // Default to highlight, Activity can override
+
+    fun toggleMode() {
+        if (isHighlightMode) {
+            // Switching Highlight -> Note
+            // Move sourceUrl into quoteContent
+            if (sourceUrl.isNotBlank()) {
+                // Check if it's already there to avoid duplication
+                if (!quoteContent.contains(sourceUrl)) {
+                     val separator = if (quoteContent.isBlank()) "" else "\n\n"
+                     quoteContent = quoteContent.trim() + separator + sourceUrl.trim()
+                }
+                sourceUrl = "" // Clear so it's not double-added by prepareEventJson
+            }
+        } else {
+            // Switching Note -> Highlight
+            // Try to extract URL from end of text
+            val urlRegex = "(https?://[^\\s]+)$".toRegex()
+            val match = urlRegex.find(quoteContent.trim())
+            if (match != null) {
+                sourceUrl = match.value
+                quoteContent = quoteContent.replace(match.value, "").trim()
+            }
+        }
+        isHighlightMode = !isHighlightMode
+    }
 
     fun prepareEventJson(): String {
         if (isHighlightMode) {
