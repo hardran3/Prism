@@ -1,4 +1,4 @@
-# Prism (NostrShare)
+# Prism
 
 Prism is a lightweight Android "Bridge" app that allows you to highlight text in any app (like a browser), "Share" it, and post it as a **NIP-84 Highlight** or **Kind 1 Note** to the Nostr network.
 
@@ -7,7 +7,7 @@ It integrates seamlessly with external **NIP-55 Signers** (like Amber) to keep y
 ## Features
 
 - **NIP-84 Highlights**: Posts `kind: 9802` events with the `content` as the highlight and `r` tags for the source URL.
-- **NIP-55 Signer Support**: Delegates signing to external apps (Amber, Gossip, etc.).
+- **NIP-55 Signer Support**: Delegates signing to external apps, such as Amber.
 - **Smart URL Extraction**: Automatically extracts Source URLs from Chrome's "Quote card" share format.
 - **Privacy First**: Includes a built-in filter to strip tracking parameters (`utm_`, `fbclid`, `si`, etc.) from shared URLs.
 - **Persistent Login**: Remembers your NIP-55 signer and profile selection over sessions.
