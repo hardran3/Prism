@@ -2,14 +2,11 @@ package com.ryans.nostrshare
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import com.ryans.nostrshare.ui.theme.NostrShareTheme
+import androidx.compose.material3.* // Keep generic if needed, or remove if unused. But let's just clean specific ones.
+// Actually, MainActivity doesn't use Compose since we removed setContent.
+// It just uses Intent and startActivity.
+
+import android.content.Intent
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -1,6 +1,6 @@
 package com.ryans.nostrshare
 
-import android.net.Uri
+import androidx.core.net.toUri
 
 object UrlUtils {
     private val TRACKING_PARAMS = setOf(
@@ -12,10 +12,9 @@ object UrlUtils {
         "t", // Twitter/X share (sometimes)
         "ref", "ref_src", "ref_url"
     )
-
     fun cleanUrl(url: String): String {
         try {
-            val uri = Uri.parse(url)
+            val uri = url.toUri()
             val builder = uri.buildUpon().clearQuery()
 
             val originalParams = uri.queryParameterNames
