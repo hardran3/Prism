@@ -13,12 +13,19 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class RelayManager(private val client: OkHttpClient) {
+class RelayManager(
+    private val client: OkHttpClient,
+    private val settingsRepository: SettingsRepository
+) {
     private val bootstrapRelays = listOf("wss://relay.damus.io", "wss://nos.lol")
 
     suspend fun fetchRelayList(pubkey: String): List<String> = withContext(Dispatchers.IO) {
         val relayList = mutableSetOf<String>()
         val latch = CountDownLatch(1) // Wait for at least one valid response or timeout
+
+        if (settingsRepository.isBlastrEnabled()) {
+            relayList.add("wss://sendit.nosflare.com/")
+        }
 
         // Simple implementation: try one by one or race them. For simplicity, race first success.
         for (url in bootstrapRelays) {
