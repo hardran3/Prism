@@ -1,83 +1,59 @@
 # Prism 🔺
 
-**Prism** is a powerful Android app for the Nostr network that lets you share **Highlights**, **Notes**, and **Media** seamlessly.
+**Prism** is a high-performance Android client for the Nostr protocol, engineered to bridge the gap between OS-level sharing intents and the decentralized web.
 
-It focuses on **creating content** (Bridge to Nostr) while offloading signing to **NIP-55** apps (like Amber) and storage to **Blossom Servers**. Your private keys never touch Prism.
-
----
-
-## ✨ Features
-
-| Feature | Description |
-|---------|-------------|
-| **NIP-84 Highlights** | Share text selections as `kind: 9802` events with source URLs. |
-| **Media Sharing** | Upload images/videos to **Blossom Servers**. |
-| **Multi-Server Upload** | Uploads to multiple servers in parallel for redundancy. |
-| **Media Optimization** | Automatically compresses images (JPEG, 85%) and strips EXIF metadata. |
-| **Draft System** | Never lose your work. Auto-saves drafts if you're interrupted. |
-| **NIP-55 Signer** | Zero private key storage. Delegates signing to external apps. |
-| **Smart URL Handling** | Intelligently manages URLs between Note body and Highlight sources. |
-| **Privacy Filter** | Strips tracking params (`utm_`, `fbclid`, etc.) from shared URLs. |
-| **NIP-65 Discovery** | Fetches your relay list to publish where you're known. |
-| **Quick Settings Tile** | Start a new note instantly from Android Quick Settings. |
+It operates on a **keyless, stateless architecture**, delegating cryptographic operations to **NIP-55** compliant signers (e.g., Amber) and offloading media storage to **Blossom (NIP-98)** servers. This design ensures that private keys never enter the application runtime, maximizing security context isolation.
 
 ---
 
-## 📲 How to Use
+## 🏗️ Architecture
 
-1.  **Install** Prism and a **NIP-55 Signer** (e.g., Amber).
-2.  **Share Content**:
-    *   **Text:** Highlight text in any app → Share → Prism.
-    *   **Media:** Share an image/video from Gallery → Prism.
-    *   **New Note:** Tap the Quick Tile or App Icon.
-3.  **Log In** (first time): Tap the **Person** icon to connect your signer.
-4.  **Customize**:
-    *   **Mode:** Toggle between Highlight (💡), Note (✏️), or Media (📷).
-    *   **Attach Media:** Tap the photo icon to upload directly.
-5.  **Publish**: Tap **Send** to sign and broadcast.
+Prism functions as an **Intent Processor**:
+1.  **Ingestion:** Intercepts `ACTION_SEND` and `ACTION_PROCESS_TEXT` intents from the Android OS.
+2.  **Normalization:** Sanitizes inputs (strips `utm_` parameters via regex) and determines the optimal Event Kind.
+3.  **Media Processing:** 
+    *   **Privacy:** Performs byte-level, lossless EXIF stripping for JPEGs to remove metadata without re-encoding artifacts.
+    *   **Optimization:** optionally resizes and compresses high-bandwidth assets (1024px / 80% Quality).
+4.  **Distribution:** Uploads media to multiple Blossom servers in parallel for redundancy.
+5.  **Signing & Broadcasting:** Constructed Event JSON is passed to a NIP-55 Signer, then broadcast via an ephemeral connection to the user's NIP-65 Relay List.
 
 ---
 
-## ⚙️ Advanced Settings
+## 🔒 Privacy Engineering
 
-Access via the **Settings (⚙️)** icon:
-
-*   **Blossom Servers**: Manage media servers (Defaults: Primal, Blossom.band).
-*   **Optimize Media**: Toggle image compression/exif-stripping (Default: On).
-*   **Always Use Kind 1**: Force all posts (media, highlights) to be Kind 1 Notes (Default: Off).
-*   **Blastr**: Enable Blastr relay gateway (Default: Off).
+*   **Zero-Knowledge Architecture:** The app has no internal database for private keys. Session state is ephemeral or token-based (pubkey only).
+*   **Metadata Scrubbing:** The `ImageProcessor` enforces privacy by stripping EXIF/XMP data from all `image/jpeg` inputs before hashing.
+*   **Link Sanitization:** Outbound links are scrubbed of common tracking query parameters (`fbclid`, `gclid`, `utm_source`, etc.) before being committed to an event.
 
 ---
 
-## 🛠️ Supported NIPs
+## ⚙️ Workflow & Configuration
 
-| NIP | Description |
-|-----|-------------|
-| [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol flow. |
-| [NIP-55](https://github.com/nostr-protocol/nips/blob/master/55.md) | External Signer Application. |
-| [NIP-65](https://github.com/nostr-protocol/nips/blob/master/65.md) | Relay List Metadata. |
-| [NIP-84](https://github.com/nostr-protocol/nips/blob/master/84.md) | Highlights. |
-| **Blossom** | HTTP Media Server Protocol. |
+### Blossom Integration
+Prism implements a **Multi-Server Upload Strategy**:
+*   **Parallelization:** Artifacts are uploaded to all configured servers simultaneously.
+*   **Resiliency:** The first successful URL is committed to the event, but all uploads continue to ensure redundancy.
+*   **Auth Standard:** Uses NIP-98 `Authorization: Nostr <base64(event)>` headers.
+
+### Configuration
+*   **Default To Kind 1**: Start all posts (media, highlights) as Kind 1 Notes. You can manually switch kinds. (Default: Off). Aggressive Compression (Resize + Re-encode).
+*   **Kind Overrides:** Option to force `kind: 1` for all payloads for legacy client compatibility.
 
 ---
 
-## 🏗️ Building
+## 🛠️ Build Instructions
 
-**Requirements:** Android Studio, Kotlin, JDK 17+
+**Environment:** Android Studio Ladybug | Kotlin 1.9 | JDK 17
 
 ```bash
-# Clone the repo
-git clone https://github.com/user/prism.git
+# Clone repository
+git clone https://github.com/ryans/prism.git
 cd prism
 
-# Build debug APK
+# Build Debug Variant
 ./gradlew assembleDebug
 ```
 
-Or open in Android Studio and click **Run**.
-
----
-
 ## 📄 License
 
-MIT
+MIT License

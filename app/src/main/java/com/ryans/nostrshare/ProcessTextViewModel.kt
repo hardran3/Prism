@@ -20,6 +20,7 @@ import org.json.JSONObject
 class ProcessTextViewModel : ViewModel() {
     var quoteContent by mutableStateOf("")
     var sourceUrl by mutableStateOf("")
+    var mediaTitle by mutableStateOf("") // User-defined title for media
     var isPublishing by mutableStateOf(false)
     var publishStatus by mutableStateOf("")
     var pubkey by mutableStateOf<String?>(null)
@@ -117,6 +118,9 @@ class ProcessTextViewModel : ViewModel() {
     var showMediaDialog by mutableStateOf(false)
     var isProcessingMedia by mutableStateOf(false)
     
+    // Dynamic Kind Selector
+    var availableKinds by mutableStateOf(listOf(PostKind.NOTE, PostKind.HIGHLIGHT)) // Default to Text options
+    
     // Multi-server upload tracking
     var uploadSuccessCount by mutableStateOf(0)
     var uploadTotalCount by mutableStateOf(0)
@@ -139,9 +143,13 @@ class ProcessTextViewModel : ViewModel() {
         
         // Auto-switch mode
         if (mimeType.startsWith("video/") || mimeType.startsWith("image/")) {
+            availableKinds = listOf(PostKind.MEDIA, PostKind.NOTE) // Media + Note
+            
             if (!settingsRepository.isAlwaysUseKind1()) {
                 setKind(PostKind.MEDIA)
             }
+            // Reset title when new media is selected
+            mediaTitle = "" 
         }
         
         // Show dialog immediately
@@ -157,16 +165,19 @@ class ProcessTextViewModel : ViewModel() {
         
         viewModelScope.launch {
             try {
-                // 0. Process image if optimization is enabled
-                val uploadUri = if (settingsRepository.isOptimizeMediaEnabled()) {
-                    uploadStatus = "Optimizing/Compressing..."
-                    val processed = ImageProcessor.processImage(context, mediaUri!!, mediaMimeType)
+                // 0. Process image (Always strip EXIF, optionally compress)
+                val isImage = mediaMimeType?.startsWith("image/") == true
+                val uploadUri = if (isImage) {
+                    uploadStatus = "Processing Image..."
+                    val shouldCompress = settingsRepository.isOptimizeMediaEnabled()
+                    val processed = ImageProcessor.processImage(context, mediaUri!!, mediaMimeType, shouldCompress)
+                    
                     if (processed != null) {
                         processedMediaUri = processed
-                        // Update MIME type to JPEG
-                        mediaMimeType = "image/jpeg"
+                        mediaMimeType = "image/jpeg" // We always convert to JPEG
                         processed
                     } else {
+                        // Processing failed or not an image (e.g. video)
                         processedMediaUri = null
                         mediaUri!!
                     }
@@ -218,7 +229,7 @@ class ProcessTextViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 // 2. Get ALL servers
-                val servers = settingsRepository.getBlossomServers()
+                val servers = settingsRepository.getEnabledBlossomServers()
                 if (servers.isEmpty()) {
                     pendingServers = listOf("https://blossom.primal.net")
                 } else {
@@ -257,7 +268,7 @@ class ProcessTextViewModel : ViewModel() {
                  isDeleting = true // Set deleting flag early
                  
                  // Get servers again or use pending? Use all current servers.
-                 val servers = settingsRepository.getBlossomServers()
+                 val servers = settingsRepository.getEnabledBlossomServers()
                  if (servers.isNotEmpty()) {
                      pendingServers = servers.toList()
                  } else {
@@ -571,18 +582,17 @@ class ProcessTextViewModel : ViewModel() {
         val tags = org.json.JSONArray()
         
         // Check if we should force Kind 1 for all posts
-        val effectiveKind = if (settingsRepository.isAlwaysUseKind1()) {
-            PostKind.NOTE
-        } else {
-            postKind
-        }
+        // Use selected kind (Setting only affects defaults)
+        val effectiveKind = postKind
         
         when (effectiveKind) {
              PostKind.NOTE -> {
                  event.put("kind", 1)
                  var content = quoteContent.trim()
-                 // Append URL if from highlight/source
-                 if (sourceUrl.isNotBlank()) content += "\n\n$sourceUrl"
+                 // Append URL if from highlight/source and NOT already in content
+                 if (sourceUrl.isNotBlank() && !content.contains(sourceUrl)) {
+                     content += "\n\n$sourceUrl"
+                 }
                  // Append media URL if present and not already in content
                  if (uploadedMediaUrl != null && !content.contains(uploadedMediaUrl!!)) {
                      val prefix = if (content.isNotBlank()) "\n\n" else ""
@@ -608,7 +618,7 @@ class ProcessTextViewModel : ViewModel() {
                  event.put("content", quoteContent.trim())
                  
                  val label = if (kind == 20) "Image" else "Video"
-                 val title = "My $label" // MVP title
+                 val title = if (mediaTitle.isNotBlank()) mediaTitle else "My $label"
                  tags.put(org.json.JSONArray().put("title").put(title))
                  
                  if (uploadedMediaUrl != null) {
@@ -619,8 +629,8 @@ class ProcessTextViewModel : ViewModel() {
                      if (uploadedMediaHash != null) imeta.put("x $uploadedMediaHash")
                      tags.put(imeta)
                      
-                     // Also add "url" tag for backward compat? 
-                     // NIP-68 says imeta.
+                     // Add legacy "url" tag for broader compatibility
+                     tags.put(org.json.JSONArray().put("url").put(uploadedMediaUrl))
                  }
                  event.put("tags", tags)
              }
@@ -661,6 +671,7 @@ class ProcessTextViewModel : ViewModel() {
                 if (successCount > 0) {
                     publishStatus = "Success! Published to $successCount relays."
                     publishSuccess = true
+                    discardDraft() // Clear draft on success
                 } else {
                     publishStatus = "Failed to publish."
                     publishSuccess = false

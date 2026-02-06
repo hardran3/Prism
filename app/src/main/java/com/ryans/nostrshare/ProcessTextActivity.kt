@@ -17,10 +17,7 @@ import com.ryans.nostrshare.ui.theme.NostrShareTheme
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.PlayArrow
@@ -40,6 +37,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.material.icons.filled.ContentCopy
 
 class ProcessTextActivity : ComponentActivity() {
 
@@ -211,6 +211,7 @@ class ProcessTextActivity : ComponentActivity() {
         // Handle Signed Result is in callback: vm.onSignedEventReceived -> vm.onEventSigned
 
         Scaffold(
+            modifier = Modifier.fillMaxSize().imePadding(), // Fix: Resize Scaffold for keyboard
             topBar = {
                 TopAppBar(
                     navigationIcon = {
@@ -261,7 +262,7 @@ class ProcessTextActivity : ComponentActivity() {
                             Icon(Icons.Filled.ArrowDropDown, "Select Mode")
                             
                             DropdownMenu(expanded = showModeMenu, onDismissRequest = { showModeMenu = false }) {
-                                ProcessTextViewModel.PostKind.entries.forEach { kind ->
+                                vm.availableKinds.forEach { kind ->
                                     DropdownMenuItem(
                                         text = { Text(kind.label) },
                                         onClick = { 
@@ -364,10 +365,22 @@ class ProcessTextActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(innerPadding)
                     .consumeWindowInsets(innerPadding)
-                    .imePadding() // Responsiveness to keyboard
+                    //.imePadding() // Removed as Scaffold handles it
                     .padding(16.dp)
                     .fillMaxSize()
             ) {
+                // Title Input (Media Only)
+                if (vm.postKind == ProcessTextViewModel.PostKind.MEDIA) {
+                    OutlinedTextField(
+                        value = vm.mediaTitle,
+                        onValueChange = { vm.mediaTitle = it },
+                        label = { Text("Title") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
                 // Main Text Input
                 OutlinedTextField(
                     value = vm.quoteContent,
@@ -389,13 +402,15 @@ class ProcessTextActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 // URL Field - visible if Highlight or if URL is present
-                if (vm.postKind == ProcessTextViewModel.PostKind.HIGHLIGHT || vm.sourceUrl.isNotBlank()) {
+                // Source URL Input - Hide for Kind 1 (Note)
+                if (vm.postKind != ProcessTextViewModel.PostKind.NOTE) {
                     OutlinedTextField(
                         value = vm.sourceUrl,
-                        onValueChange = { vm.updateSource(it) },
+                        onValueChange = { vm.sourceUrl = it },
                         label = { Text("Source URL") },
-                        modifier = Modifier.fillMaxWidth(),
-                        leadingIcon = { Icon(Icons.Filled.Link, "URL") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
                         singleLine = true
                     )
                 }
@@ -413,6 +428,8 @@ class ProcessTextActivity : ComponentActivity() {
                             vm.showMediaDialog = false
                         }
                     }
+                    
+                    val clipboardManager = LocalClipboardManager.current
                     
                     Card(
                         modifier = Modifier.fillMaxWidth().clickable { 
@@ -432,13 +449,33 @@ class ProcessTextActivity : ComponentActivity() {
                                   if (vm.mediaMimeType?.startsWith("image/") == true) {
                                       coil.compose.AsyncImage(
                                           model = thumbModel,
-                                          contentDescription = "Preview",
-                                          modifier = Modifier.size(80.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
+                                          contentDescription = "Preview (Tap to Copy URL)",
+                                          modifier = Modifier
+                                              .size(80.dp)
+                                              .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                              .clickable {
+                                                  vm.uploadedMediaUrl?.let { url ->
+                                                      clipboardManager.setText(AnnotatedString(url))
+                                                      Toast.makeText(this@ProcessTextActivity, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                                                  }
+                                              },
                                           contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                       )
                                   } else {
                                       // Video icon
-                                      Box(modifier = Modifier.size(80.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).background(Color.Black), contentAlignment = Alignment.Center) {
+                                      Box(
+                                          modifier = Modifier
+                                              .size(80.dp)
+                                              .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                              .background(Color.Black)
+                                              .clickable {
+                                                  vm.uploadedMediaUrl?.let { url ->
+                                                      clipboardManager.setText(AnnotatedString(url))
+                                                      Toast.makeText(this@ProcessTextActivity, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                                                  }
+                                              },
+                                          contentAlignment = Alignment.Center
+                                      ) {
                                            Icon(Icons.Filled.PlayArrow, "Video", tint = Color.White)
                                       }
                                   }
@@ -485,6 +522,17 @@ class ProcessTextActivity : ComponentActivity() {
                                   }
                                   
                                   if (!vm.isUploading) {
+                                      if (vm.uploadedMediaUrl != null) {
+                                          IconButton(onClick = { 
+                                              vm.uploadedMediaUrl?.let { url ->
+                                                  clipboardManager.setText(AnnotatedString(url))
+                                                  Toast.makeText(this@ProcessTextActivity, "URL copied", Toast.LENGTH_SHORT).show()
+                                              }
+                                          }) {
+                                              Icon(Icons.Default.ContentCopy, "Copy URL", tint = MaterialTheme.colorScheme.primary)
+                                          }
+                                      }
+                                      
                                       IconButton(onClick = { vm.deleteMedia() }) {
                                           Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error)
                                       }
