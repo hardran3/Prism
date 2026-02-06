@@ -84,7 +84,7 @@ class RelayManager(
         
         try {
             latch.await(5, TimeUnit.SECONDS)
-        } catch (e: InterruptedException) {
+        } catch (_: InterruptedException) {
             // Timeout
         }
         
@@ -117,7 +117,7 @@ class RelayManager(
                              webSocket.close(1000, "Done")
                              latch.countDown()
                          }
-                     } catch (e: Exception) {
+                     } catch (_: Exception) {
                         // ignore
                      }
                  }
@@ -139,7 +139,7 @@ class RelayManager(
 
         try {
             latch.await(10, TimeUnit.SECONDS)
-        } catch (e: InterruptedException) {
+        } catch (_: InterruptedException) {
             // Timeout
         }
         

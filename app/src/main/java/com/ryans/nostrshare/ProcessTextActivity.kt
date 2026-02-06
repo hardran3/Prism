@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
@@ -64,7 +65,7 @@ class ProcessTextActivity : ComponentActivity() {
              // Retry pending actions
              if (viewModel.postKind == ProcessTextViewModel.PostKind.MEDIA) {
                  if (viewModel.mediaUri != null && viewModel.uploadedMediaUrl == null) {
-                      viewModel.startUpload(this)
+                      viewModel.initiateUploadAuth(this)
                  }
              }
         }.onError { error ->
@@ -83,15 +84,19 @@ class ProcessTextActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        viewModel.checkDraft() // Check for saved work
+        
         // ... (Keep existing Intent handling logic) ...
          if (intent.action == Intent.ACTION_PROCESS_TEXT) {
             val text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
             if (text != null) {
                 viewModel.updateQuote(text)
+                viewModel.onHighlightShared()
             }
         } else if (intent.action == Intent.ACTION_SEND) {
             // Handle STREAM for images/video
             if (intent.type?.startsWith("image/") == true || intent.type?.startsWith("video/") == true) {
+                 @Suppress("DEPRECATION")
                  val uri = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)
                  if (uri != null) {
                      val type = intent.type ?: contentResolver.getType(uri) ?: "application/octet-stream"
@@ -112,7 +117,11 @@ class ProcessTextActivity : ComponentActivity() {
                     val content = text.replace(match.value, "").trim()
                     val cleanContent = if (content.startsWith("\"") && content.endsWith("\"")) content.removeSurrounding("\"") else content
                     
-                    if (cleanContent.isNotBlank()) viewModel.updateQuote(cleanContent)
+                    if (cleanContent.isNotBlank()) {
+                        viewModel.updateQuote(cleanContent)
+                        // If we have quoted content and a URL, treat as highlight
+                        viewModel.onHighlightShared()
+                    }
                     else if (!subject.isNullOrBlank()) viewModel.updateQuote(subject)
                     
                     viewModel.updateSource(UrlUtils.cleanUrl(url))
@@ -143,8 +152,34 @@ class ProcessTextActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
     @Composable
     fun ShareScreen(vm: ProcessTextViewModel) {
-        val title = if (vm.postKind == ProcessTextViewModel.PostKind.HIGHLIGHT) "New Highlight" else "New Note"
         val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+        
+        // Auto-save Draft
+        LaunchedEffect(vm.quoteContent, vm.sourceUrl, vm.postKind, vm.mediaUri, vm.uploadedMediaUrl) {
+            if (vm.isDraftMonitoringActive) {
+                kotlinx.coroutines.delay(1000) // Debounce 1s
+                vm.saveDraft()
+            }
+        }
+
+        // Draft Prompt
+        if (vm.showDraftPrompt) {
+            AlertDialog(
+                onDismissRequest = { },
+                title = { Text("Unsaved Draft Found") },
+                text = { Text("You have an unsaved note from a previous session. Would you like to resume editing it or start a new note?") },
+                confirmButton = {
+                    Button(onClick = { vm.applyDraft() }) {
+                        Text("Resume Draft")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { vm.discardDraft() }) {
+                        Text("Start New")
+                    }
+                }
+            )
+        }
         
         // Auto-focus
         LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -226,7 +261,7 @@ class ProcessTextActivity : ComponentActivity() {
                             Icon(Icons.Filled.ArrowDropDown, "Select Mode")
                             
                             DropdownMenu(expanded = showModeMenu, onDismissRequest = { showModeMenu = false }) {
-                                ProcessTextViewModel.PostKind.values().forEach { kind ->
+                                ProcessTextViewModel.PostKind.entries.forEach { kind ->
                                     DropdownMenuItem(
                                         text = { Text(kind.label) },
                                         onClick = { 
@@ -298,7 +333,7 @@ class ProcessTextActivity : ComponentActivity() {
                                         if (vm.postKind == ProcessTextViewModel.PostKind.MEDIA) {
                                             if (vm.uploadedMediaUrl == null) {
                                                 if (!vm.isUploading && vm.mediaUri != null) {
-                                                     vm.startUpload(this@ProcessTextActivity) // Retry upload
+                                                     vm.initiateUploadAuth(this@ProcessTextActivity) // Retry upload
                                                      return@FloatingActionButton
                                                 }
                                                 Toast.makeText(this@ProcessTextActivity, "Please wait for media upload.", Toast.LENGTH_SHORT).show()
@@ -366,10 +401,18 @@ class ProcessTextActivity : ComponentActivity() {
                 }
                 
                 // Media Preview Card
-                if (vm.uploadedMediaUrl != null || vm.isUploading) {
+                if (vm.mediaUri != null) {
                     Spacer(modifier = Modifier.height(16.dp))
                     
                     var showMediaDetail by remember { mutableStateOf(false) }
+                    
+                    // Sync with VM requests
+                    LaunchedEffect(vm.showMediaDialog) {
+                        if (vm.showMediaDialog) {
+                            showMediaDetail = true
+                            vm.showMediaDialog = false
+                        }
+                    }
                     
                     Card(
                         modifier = Modifier.fillMaxWidth().clickable { 
@@ -468,6 +511,8 @@ fun MediaDetailDialog(
     vm: ProcessTextViewModel,
     onDismiss: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         androidx.compose.material3.Surface(
             shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
@@ -498,6 +543,20 @@ fun MediaDetailDialog(
                 
                 Spacer(modifier = Modifier.height(16.dp))
                 
+                // Status Header
+                if (vm.isProcessingMedia) {
+                     Row(verticalAlignment = Alignment.CenterVertically) {
+                         CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                         Spacer(modifier = Modifier.width(8.dp))
+                         Text(vm.uploadStatus, style = MaterialTheme.typography.bodyMedium)
+                     }
+                     Spacer(modifier = Modifier.height(16.dp))
+                } else if (vm.isUploading) {
+                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                     Text(vm.uploadStatus, style = MaterialTheme.typography.labelSmall)
+                     Spacer(modifier = Modifier.height(16.dp))
+                }
+                
                 // File Details
                 Text("File Details", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(8.dp))
@@ -519,7 +578,7 @@ fun MediaDetailDialog(
                 if (vm.uploadedMediaSize != null) {
                     val sizeKb = vm.uploadedMediaSize!! / 1024
                     val sizeMb = sizeKb / 1024.0
-                    val sizeText = if (sizeMb >= 1.0) String.format("%.2f MB", sizeMb) else "$sizeKb KB"
+                    val sizeText = if (sizeMb >= 1.0) String.format(java.util.Locale.US, "%.2f MB", sizeMb) else "$sizeKb KB"
                     Text("File Size: $sizeText", style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -570,16 +629,60 @@ fun MediaDetailDialog(
                     }
                 }
                 
-                Spacer(modifier = Modifier.height(16.dp))
+                // Server Delete Results
+                 if (vm.deleteServerResults.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Server DELETE Status", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    vm.deleteServerResults.forEach { (server, success) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (success) Icons.Default.Delete else Icons.Default.Warning,
+                                contentDescription = if (success) "Deleted" else "Failed",
+                                tint = if (success) Color.Gray else Color(0xFFF44336),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                server,
+                                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
                 
-                // Close button
-                TextButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.align(Alignment.End)
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Actions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Text("Close")
+                    if (vm.isProcessingMedia || vm.isUploading || vm.isDeleting) {
+                         // Busy state
+                         /*Wait*/
+                    } else if (vm.uploadedMediaUrl == null) {
+                        // Not uploaded yet
+                        TextButton(onClick = onDismiss) { Text("Cancel") }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = { vm.initiateUploadAuth(context) }) { Text("Upload") }
+                    } else {
+                        // Uploaded
+                        TextButton(onClick = { vm.deleteMedia() }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { 
+                            Text("Delete") 
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = onDismiss) { Text("Close") }
+                    }
                 }
             }
         }
     }
 }
+

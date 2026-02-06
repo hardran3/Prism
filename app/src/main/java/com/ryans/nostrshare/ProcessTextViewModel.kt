@@ -66,14 +66,6 @@ class ProcessTextViewModel : ViewModel() {
         refreshUserProfile()
     }
     
-    fun logout() {
-        pubkey = null
-        npub = null
-        signerPackageName = null
-        userProfile = null
-        
-        prefs.edit().clear().apply()
-    }
 
     private fun refreshUserProfile() {
         val pk = pubkey ?: return
@@ -99,6 +91,12 @@ class ProcessTextViewModel : ViewModel() {
 
     fun updateSource(newSource: String) {
         sourceUrl = newSource
+        
+        // Ensure URL is visible in text body if in NOTE mode
+        if (postKind == PostKind.NOTE && newSource.isNotBlank() && !quoteContent.contains(newSource)) {
+             val prefix = if (quoteContent.isNotBlank()) "\n\n" else ""
+             quoteContent += "$prefix$newSource"
+        }
     }
 
     var publishSuccess by mutableStateOf<Boolean?>(null) // null = idle/publishing, true = success, false = failed
@@ -115,10 +113,15 @@ class ProcessTextViewModel : ViewModel() {
     var isDeleting by mutableStateOf(false) // Track delete status
     var uploadStatus by mutableStateOf("")
     
+    // New UX State
+    var showMediaDialog by mutableStateOf(false)
+    var isProcessingMedia by mutableStateOf(false)
+    
     // Multi-server upload tracking
     var uploadSuccessCount by mutableStateOf(0)
     var uploadTotalCount by mutableStateOf(0)
     var uploadServerResults by mutableStateOf<List<Pair<String, Boolean>>>(emptyList()) // (serverUrl, success)
+    var deleteServerResults by mutableStateOf<List<Pair<String, Boolean>>>(emptyList()) // (serverUrl, success)
 
     // Signing Flow
     enum class SigningPurpose { POST, UPLOAD_AUTH, DELETE_AUTH }
@@ -131,57 +134,89 @@ class ProcessTextViewModel : ViewModel() {
         uploadedMediaUrl = null
         uploadedMediaHash = null
         uploadedMediaSize = null
+        processedMediaUri = null
+        uploadServerResults = emptyList()
         
         // Auto-switch mode
         if (mimeType.startsWith("video/") || mimeType.startsWith("image/")) {
-            setKind(PostKind.MEDIA)
+            if (!settingsRepository.isAlwaysUseKind1()) {
+                setKind(PostKind.MEDIA)
+            }
         }
+        
+        // Show dialog immediately
+        showMediaDialog = true
+        
+        // Start background processing (Hash/Compress)
+        prepareMedia(context)
+    }
+    
+    private fun prepareMedia(context: Context) {
+        uploadStatus = "Processing media..."
+        isProcessingMedia = true
+        
+        viewModelScope.launch {
+            try {
+                // 0. Process image if optimization is enabled
+                val uploadUri = if (settingsRepository.isOptimizeMediaEnabled()) {
+                    uploadStatus = "Optimizing/Compressing..."
+                    val processed = ImageProcessor.processImage(context, mediaUri!!, mediaMimeType)
+                    if (processed != null) {
+                        processedMediaUri = processed
+                        // Update MIME type to JPEG
+                        mediaMimeType = "image/jpeg"
+                        processed
+                    } else {
+                        processedMediaUri = null
+                        mediaUri!!
+                    }
+                } else {
+                    processedMediaUri = null
+                    mediaUri!!
+                }
+                
+                // 1. Hash and Size
+                uploadStatus = "Calculating Hash..."
+                val (hash, size) = blossomClient.hashFile(context, uploadUri)
+                uploadedMediaHash = hash
+                uploadedMediaSize = size
+                
+                uploadStatus = "Ready to Upload"
+                isProcessingMedia = false
+                
+            } catch (e: Exception) {
+                uploadStatus = "Error: ${e.message}"
+                isProcessingMedia = false
+            }
+        }
+    }
 
-        startUpload(context)
+    fun onHighlightShared() {
+        if (!settingsRepository.isAlwaysUseKind1()) {
+            setKind(PostKind.HIGHLIGHT)
+        }
     }
     
     // Pending upload state for multi-server
     private var pendingServers: List<String> = emptyList()
     private var processedMediaUri: android.net.Uri? = null // Processed/optimized media URI
     
-    fun startUpload(context: Context) {
-        val uri = mediaUri ?: return
+    fun initiateUploadAuth(context: Context) {
         val pk = pubkey
-        
         if (pk == null) {
-            uploadStatus = "Please login (click avatar) to upload."
+            uploadStatus = "Please login to upload."
             return
         }
-        uploadStatus = "Preparing upload..."
+        
+        // Assume preparation is done
+        val hash = uploadedMediaHash ?: return
+        val size = uploadedMediaSize ?: return
+        
+        uploadStatus = "Preparing upload auth..."
         isUploading = true
         
         viewModelScope.launch {
             try {
-                // 0. Process image if optimization is enabled
-                val uploadUri = if (settingsRepository.isOptimizeMediaEnabled()) {
-                    uploadStatus = "Optimizing media..."
-                    val processed = ImageProcessor.processImage(context, uri, mediaMimeType)
-                    if (processed != null) {
-                        processedMediaUri = processed
-                        // Update MIME type to JPEG since we converted
-                        mediaMimeType = "image/jpeg"
-                        processed
-                    } else {
-                        // Processing not applicable (video, gif, etc) - use original
-                        processedMediaUri = null
-                        uri
-                    }
-                } else {
-                    processedMediaUri = null
-                    uri
-                }
-                
-                // 1. Hash and Size (use processed URI)
-                uploadStatus = "Calculating hash..."
-                val (hash, size) = blossomClient.hashFile(context, uploadUri)
-                uploadedMediaHash = hash
-                uploadedMediaSize = size
-                
                 // 2. Get ALL servers
                 val servers = settingsRepository.getBlossomServers()
                 if (servers.isEmpty()) {
@@ -195,14 +230,13 @@ class ProcessTextViewModel : ViewModel() {
                 uploadSuccessCount = 0
                 uploadServerResults = emptyList()
                 
-                // Use first server for auth (all servers should accept same auth)
+                // Use first server for auth
                 pendingAuthServerUrl = pendingServers.first()
                 
                 // For Upload, operation is "upload" (default)
                 val authEventJson = blossomClient.createAuthEventJson(hash, size, pk, "upload")
                 
                 // 3. Ask Activity to Sign
-
                 currentSigningPurpose = SigningPurpose.UPLOAD_AUTH
                 _eventToSign.value = authEventJson
                 
@@ -216,23 +250,32 @@ class ProcessTextViewModel : ViewModel() {
     fun deleteMedia() {
         val hash = uploadedMediaHash ?: return
         val pk = pubkey ?: return
-        val server = pendingAuthServerUrl ?: return // Assume same server we uploaded to?
-        // If we lost pendingAuthServerUrl (e.g. app restart), we might not be able to delete correctly without parsing URL or guessing.
-        // For current session deletion, pendingAuthServerUrl should be fine.
-        // Ideally we should track which server the current uploaded URL belongs to. 
-        // For now, let's use pendingAuthServerUrl or try to derive.
         
         viewModelScope.launch {
             try {
                  uploadStatus = "Preparing delete..."
+                 isDeleting = true // Set deleting flag early
+                 
+                 // Get servers again or use pending? Use all current servers.
+                 val servers = settingsRepository.getBlossomServers()
+                 if (servers.isNotEmpty()) {
+                     pendingServers = servers.toList()
+                 } else {
+                     pendingServers = listOf("https://blossom.primal.net")
+                 }
+                 pendingAuthServerUrl = pendingServers.firstOrNull()
+                 
                  val authEventJson = blossomClient.createAuthEventJson(hash, null, pk, "delete")
                  currentSigningPurpose = SigningPurpose.DELETE_AUTH
                  _eventToSign.value = authEventJson
             } catch (e: Exception) {
                 uploadStatus = "Delete prepare failed: ${e.message}"
+                isDeleting = false
             }
         }
     }
+                
+
 
     // LiveData/Flow to communicate with Activity for signing
     private val _eventToSign = MutableStateFlow<String?>(null)
@@ -249,22 +292,41 @@ class ProcessTextViewModel : ViewModel() {
 
     private fun finalizeDelete(signedAuthEvent: String) {
         val hash = uploadedMediaHash ?: return
-        val server = pendingAuthServerUrl ?: return
+        val servers = pendingServers
         
         viewModelScope.launch {
             try {
                 isDeleting = true
-                uploadStatus = "Deleting..."
-                val success = blossomClient.delete(hash, signedAuthEvent, server)
-                if (success) {
-                    uploadStatus = "Media deleted."
-                    uploadedMediaUrl = null
-                    uploadedMediaHash = null
-                    uploadedMediaSize = null
-                    mediaUri = null
-                } else {
-                    uploadStatus = "Delete failed on server."
+                uploadStatus = "Deleting from ${servers.size} servers..."
+                
+                val results = mutableListOf<Pair<String, Boolean>>()
+                
+                kotlinx.coroutines.coroutineScope {
+                    val jobs = servers.map { server ->
+                         async {
+                             try {
+                                 val success = blossomClient.delete(hash, signedAuthEvent, server)
+                                 synchronized(results) { results.add(server to success) }
+                             } catch (_: Exception) {
+                                 synchronized(results) { results.add(server to false) }
+                             }
+                         }
+                    }
+                    jobs.awaitAll()
                 }
+                
+                deleteServerResults = results.toList()
+                val successCount = results.count { it.second }
+                
+                uploadStatus = "Deleted from $successCount/${servers.size} servers."
+                
+                // Clear state regardless of full success
+                uploadedMediaUrl = null
+                uploadedMediaHash = null
+                uploadedMediaSize = null
+                mediaUri = null
+                processedMediaUri = null
+                
             } catch (e: Exception) {
                 uploadStatus = "Delete error: ${e.message}"
             } finally {
@@ -347,25 +409,155 @@ class ProcessTextViewModel : ViewModel() {
     
     var postKind by mutableStateOf(PostKind.NOTE)
 
+    // Draft State
+    var showDraftPrompt by mutableStateOf(false)
+    var isDraftMonitoringActive by mutableStateOf(false)
+    private var pendingDraft: Draft? = null
+
+    data class Draft(
+        val content: String,
+        val source: String,
+        val kind: PostKind,
+        val mediaUri: String?,
+        val mediaMime: String?,
+        val uploadedUrl: String?,
+        val uploadedHash: String?,
+        val uploadedSize: Long?
+    )
+
+    fun checkDraft() {
+        // Load draft from prefs
+        val content = prefs.getString("draft_content", "") ?: ""
+        val source = prefs.getString("draft_source", "") ?: ""
+        val kindStr = prefs.getString("draft_kind", "NOTE") ?: "NOTE"
+        val mediaUriStr = prefs.getString("draft_media_uri", null)
+        val uploadedUrl = prefs.getString("draft_uploaded_url", null)
+        
+        // If we have substantial content, prompt
+        if (content.isNotBlank() || source.isNotBlank() || mediaUriStr != null || uploadedUrl != null) {
+             val kind = try { PostKind.valueOf(kindStr) } catch(_: Exception) { PostKind.NOTE }
+             
+             pendingDraft = Draft(
+                 content = content,
+                 source = source,
+                 kind = kind,
+                 mediaUri = mediaUriStr,
+                 mediaMime = prefs.getString("draft_media_mime", null),
+                 uploadedUrl = uploadedUrl,
+                 uploadedHash = prefs.getString("draft_uploaded_hash", null),
+                 uploadedSize = if (prefs.contains("draft_uploaded_size")) prefs.getLong("draft_uploaded_size", 0L) else null
+             )
+             showDraftPrompt = true
+        } else {
+             // No draft, enable monitoring immediately
+             isDraftMonitoringActive = true
+        }
+    }
+
+    fun applyDraft() {
+        pendingDraft?.let { draft ->
+            quoteContent = draft.content
+            sourceUrl = draft.source
+            postKind = draft.kind // Direct assignment to avoid side effects
+            
+            if (draft.mediaUri != null) {
+                mediaUri = android.net.Uri.parse(draft.mediaUri)
+                mediaMimeType = draft.mediaMime
+            }
+            if (draft.uploadedUrl != null) {
+                uploadedMediaUrl = draft.uploadedUrl
+                uploadedMediaHash = draft.uploadedHash
+                uploadedMediaSize = draft.uploadedSize
+            }
+        }
+        pendingDraft = null
+        showDraftPrompt = false
+        isDraftMonitoringActive = true
+    }
+    
+    fun discardDraft() {
+        prefs.edit()
+            .remove("draft_content")
+            .remove("draft_source")
+            .remove("draft_kind")
+            .remove("draft_media_uri")
+            .remove("draft_media_mime")
+            .remove("draft_uploaded_url")
+            .remove("draft_uploaded_hash")
+            .remove("draft_uploaded_size")
+            .apply()
+            
+        pendingDraft = null
+        showDraftPrompt = false
+        isDraftMonitoringActive = true
+    }
+
+    fun saveDraft() {
+        if (!isDraftMonitoringActive) return
+        
+        // Don't save if empty
+        if (quoteContent.isBlank() && sourceUrl.isBlank() && mediaUri == null) {
+             discardDraft()
+             return
+        }
+
+        prefs.edit()
+            .putString("draft_content", quoteContent)
+            .putString("draft_source", sourceUrl)
+            .putString("draft_kind", postKind.name)
+            .putString("draft_media_uri", mediaUri?.toString())
+            .putString("draft_media_mime", mediaMimeType)
+            .putString("draft_uploaded_url", uploadedMediaUrl)
+            .putString("draft_uploaded_hash", uploadedMediaHash)
+            .putLong("draft_uploaded_size", uploadedMediaSize ?: 0L)
+            .apply()
+    }
+
     fun setKind(kind: PostKind) {
         val oldKind = postKind
         postKind = kind
         
-        // Intelligent URL handling
-        val url = uploadedMediaUrl
-        if (url != null) {
-            if (kind == PostKind.NOTE) {
-                // Switching TO Note: Add URL if missing
-                if (!quoteContent.contains(url)) {
-                     val prefix = if (quoteContent.isNotBlank()) "\n\n" else ""
-                     quoteContent += "$prefix$url"
-                }
-            } else if (oldKind == PostKind.NOTE && kind == PostKind.MEDIA) {
-                // Switching FROM Note TO Media: Remove URL if present at end
-                if (quoteContent.endsWith(url)) {
-                    quoteContent = quoteContent.removeSuffix(url).trim()
-                }
+        // URLs to manage
+        val mediaUrl = uploadedMediaUrl
+        val sUrl = sourceUrl
+        
+        // 1. Cleanup Phase: If leaving NOTE, remove auto-added URLs
+        if (oldKind == PostKind.NOTE && kind != PostKind.NOTE) {
+            var content = quoteContent.trim() // Trim to ensure endsWith matches
+            
+            // Remove Media URL if at end
+            if (mediaUrl != null && content.endsWith(mediaUrl)) {
+                content = content.removeSuffix(mediaUrl).trim()
             }
+            
+            // Remove Source URL if at end
+            if (sUrl.isNotBlank() && content.endsWith(sUrl)) {
+                 content = content.removeSuffix(sUrl).trim()
+            }
+            
+            // Re-check Media URL (in case order was different)
+            if (mediaUrl != null && content.endsWith(mediaUrl)) {
+                content = content.removeSuffix(mediaUrl).trim()
+            }
+            
+            quoteContent = content
+        }
+        
+        // 2. Setup Phase: If entering NOTE, append URLs
+        if (kind == PostKind.NOTE) {
+            var content = quoteContent
+            
+            if (sUrl.isNotBlank() && !content.contains(sUrl)) {
+                 val prefix = if (content.isNotBlank()) "\n\n" else ""
+                 content += "$prefix$sUrl"
+            }
+            
+            if (mediaUrl != null && !content.contains(mediaUrl)) {
+                 val prefix = if (content.isNotBlank()) "\n\n" else ""
+                 content += "$prefix$mediaUrl"
+            }
+            
+            quoteContent = content
         }
     }
 
