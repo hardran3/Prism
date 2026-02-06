@@ -163,23 +163,7 @@ class ProcessTextActivity : ComponentActivity() {
         }
 
         // Draft Prompt
-        if (vm.showDraftPrompt) {
-            AlertDialog(
-                onDismissRequest = { },
-                title = { Text("Unsaved Draft Found") },
-                text = { Text("You have an unsaved note from a previous session. Would you like to resume editing it or start a new note?") },
-                confirmButton = {
-                    Button(onClick = { vm.applyDraft() }) {
-                        Text("Resume Draft")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { vm.discardDraft() }) {
-                        Text("Start New")
-                    }
-                }
-            )
-        }
+
         
         // Auto-focus
         LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -299,6 +283,23 @@ class ProcessTextActivity : ComponentActivity() {
                            Text(status, maxLines = 1, style = MaterialTheme.typography.bodyMedium)
                        }
                    }
+                } else if (vm.showDraftPrompt) {
+                    BottomAppBar {
+                        Text(
+                            text = "Unsaved draft found",
+                            modifier = Modifier.weight(1f).padding(start = 16.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        TextButton(onClick = { vm.discardDraft() }) {
+                            Text("Discard")
+                        }
+                        Button(
+                            onClick = { vm.applyDraft() },
+                            modifier = Modifier.padding(end = 16.dp)
+                        ) {
+                            Text("Resume")
+                        }
+                    }
                 } else {
                     BottomAppBar(
                          actions = {
