@@ -503,6 +503,18 @@ class ProcessTextViewModel : ViewModel() {
         isDraftMonitoringActive = true
     }
 
+    fun clearContent() {
+        quoteContent = ""
+        sourceUrl = ""
+        mediaUri = null
+        mediaMimeType = null
+        uploadedMediaUrl = null
+        uploadedMediaHash = null
+        uploadedMediaSize = null
+        postKind = PostKind.NOTE
+        discardDraft()
+    }
+
     fun saveDraft() {
         if (!isDraftMonitoringActive) return
         

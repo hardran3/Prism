@@ -165,6 +165,9 @@ class ProcessTextActivity : ComponentActivity() {
         // Draft Prompt
 
         
+        
+        var showConfirmClear by remember { mutableStateOf(false) }
+
         // Auto-focus
         LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
@@ -303,6 +306,39 @@ class ProcessTextActivity : ComponentActivity() {
                 } else {
                     BottomAppBar(
                          actions = {
+                             // Clear & Close Button
+                             // Clear & Close Button (FAB Style)
+                             // Clear & Close Button (FAB Style)
+                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                  FloatingActionButton(
+                                     onClick = { showConfirmClear = !showConfirmClear },
+                                     containerColor = MaterialTheme.colorScheme.errorContainer,
+                                     contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                     modifier = Modifier.padding(start = 16.dp) 
+                                 ) {
+                                     // Icon changes based on state
+                                     if (showConfirmClear) {
+                                         Icon(Icons.Default.Close, "Cancel Delete")
+                                     } else {
+                                         Icon(Icons.Default.Delete, "Clear & Close")
+                                     }
+                                 }
+                                 
+                                 if (showConfirmClear) {
+                                     Spacer(modifier = Modifier.width(16.dp))
+                                     FloatingActionButton(
+                                         onClick = { 
+                                             vm.clearContent()
+                                             finish()
+                                         },
+                                         containerColor = MaterialTheme.colorScheme.error,
+                                         contentColor = MaterialTheme.colorScheme.onError
+                                     ) {
+                                         Icon(Icons.Default.Check, "Confirm Delete")
+                                     }
+                                 }
+                             }
+
                             if (vm.publishSuccess == false || vm.uploadStatus.startsWith("Error") || vm.uploadStatus.startsWith("Upload failed")) {
                                 Text(
                                     text = if (vm.uploadStatus.isNotBlank()) vm.uploadStatus else "Failed. Retry?", 
