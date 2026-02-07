@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.foundation.shape.CircleShape
@@ -289,18 +290,27 @@ class ProcessTextActivity : ComponentActivity() {
                 } else if (vm.showDraftPrompt) {
                     BottomAppBar {
                         Text(
-                            text = "Unsaved draft found",
-                            modifier = Modifier.weight(1f).padding(start = 16.dp),
-                            style = MaterialTheme.typography.bodyMedium
+                            text = "Resume Draft?",
+                            modifier = Modifier.padding(start = 16.dp).weight(1f),
+                            style = MaterialTheme.typography.titleMedium
                         )
-                        TextButton(onClick = { vm.discardDraft() }) {
-                            Text("Discard")
+                        
+                        // Discard (X)
+                        FloatingActionButton(
+                            onClick = { vm.discardDraft() },
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(end = 16.dp)
+                        ) {
+                            Icon(Icons.Default.Close, "Discard Draft")
                         }
-                        Button(
+                        
+                        // Resume (Check)
+                        FloatingActionButton(
                             onClick = { vm.applyDraft() },
                             modifier = Modifier.padding(end = 16.dp)
                         ) {
-                            Text("Resume")
+                            Icon(Icons.Default.Check, "Resume Draft")
                         }
                     }
                 } else {
