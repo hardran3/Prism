@@ -7,6 +7,11 @@ data class BlossomServer(val url: String, val enabled: Boolean)
 
 class SettingsRepository(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("nostr_share_settings", Context.MODE_PRIVATE)
+    
+    private val defaultServers = listOf(
+        BlossomServer("https://blossom.primal.net", true),
+        BlossomServer("https://blossom.band", true)
+    )
 
     fun isAlwaysUseKind1(): Boolean = prefs.getBoolean("always_kind_1", false)
     fun setAlwaysUseKind1(enabled: Boolean) = prefs.edit().putBoolean("always_kind_1", enabled).apply()
@@ -17,14 +22,14 @@ class SettingsRepository(context: Context) {
     fun isBlastrEnabled(): Boolean = prefs.getBoolean("blastr_enabled", false)
     fun setBlastrEnabled(enabled: Boolean) = prefs.edit().putBoolean("blastr_enabled", enabled).apply()
 
+    fun isHapticEnabled(): Boolean = prefs.getBoolean("haptic_enabled", true)
+    fun setHapticEnabled(enabled: Boolean) = prefs.edit().putBoolean("haptic_enabled", enabled).apply()
+
     fun getBlossomServers(): List<BlossomServer> {
         val jsonString = prefs.getString("blossom_servers_json", null)
         if (jsonString == null) {
              // Defaults
-             return listOf(
-                 BlossomServer("https://blossom.primal.net", true),
-                 BlossomServer("https://blossom.band", true)
-             )
+             return defaultServers
         }
         
         val list = mutableListOf<BlossomServer>()
@@ -35,10 +40,7 @@ class SettingsRepository(context: Context) {
                 list.add(BlossomServer(obj.getString("url"), obj.getBoolean("enabled")))
             }
         } catch (e: Exception) {
-            return listOf(
-                 BlossomServer("https://blossom.primal.net", true),
-                 BlossomServer("https://blossom.band", true)
-             )
+            return defaultServers
         }
         return list
     }

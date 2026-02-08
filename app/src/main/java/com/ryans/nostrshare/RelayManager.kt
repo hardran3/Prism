@@ -177,7 +177,8 @@ class RelayManager(
                                 val content = JSONObject(contentStr)
                                 profile = UserProfile(
                                     name = content.optString("name", "").ifEmpty { content.optString("display_name") },
-                                    pictureUrl = content.optString("picture")
+                                    pictureUrl = content.optString("picture"),
+                                    lud16 = content.optString("lud16")
                                 )
                             }
                             webSocket.close(1000, "Done")
@@ -203,9 +204,70 @@ class RelayManager(
         
         return@withContext profile
     }
+
+    suspend fun fetchBlossomServerList(pubkey: String): List<String> = withContext(Dispatchers.IO) {
+        val serverList = mutableSetOf<String>()
+        val latch = CountDownLatch(1)
+
+        for (url in bootstrapRelays) {
+            val request = Request.Builder().url(url).build()
+            val listener = object : WebSocketListener() {
+                val subId = UUID.randomUUID().toString()
+                
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    val filter = JSONObject()
+                    filter.put("kinds", JSONArray().put(10063)) // Kind 10063: Blossom Server List
+                    filter.put("authors", JSONArray().put(pubkey))
+                    filter.put("limit", 1)
+                    val req = JSONArray()
+                    req.put("REQ")
+                    req.put(subId)
+                    req.put(filter)
+                    webSocket.send(req.toString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val json = JSONArray(text)
+                        val type = json.optString(0)
+                        if (type == "EVENT" && json.optString(1) == subId) {
+                            val event = json.getJSONObject(2)
+                            val tags = event.optJSONArray("tags")
+                            if (tags != null) {
+                                for (i in 0 until tags.length()) {
+                                    val tag = tags.getJSONArray(i)
+                                    if (tag.length() > 1 && tag.getString(0) == "server") {
+                                        serverList.add(tag.getString(1))
+                                    }
+                                }
+                            }
+                            webSocket.close(1000, "Done")
+                            latch.countDown()
+                        } else if (type == "EOSE" && json.optString(1) == subId) {
+                           webSocket.close(1000, "EOSE")
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                     // Fail silently
+                }
+            }
+            client.newWebSocket(request, listener)
+        }
+        
+        try {
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) { }
+        
+        return@withContext serverList.toList()
+    }
 }
 
 data class UserProfile(
     val name: String?,
-    val pictureUrl: String?
+    val pictureUrl: String?,
+    val lud16: String? = null
 )

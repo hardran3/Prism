@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
@@ -83,6 +85,7 @@ class ProcessTextActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         
         viewModel.checkDraft() // Check for saved work
@@ -154,6 +157,7 @@ class ProcessTextActivity : ComponentActivity() {
     @Composable
     fun ShareScreen(vm: ProcessTextViewModel) {
         val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+        val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
         
         // Auto-save Draft
         LaunchedEffect(vm.quoteContent, vm.sourceUrl, vm.postKind, vm.mediaUri, vm.uploadedMediaUrl) {
@@ -207,6 +211,9 @@ class ProcessTextActivity : ComponentActivity() {
                         IconButton(
                             modifier = Modifier.padding(start = 8.dp).size(48.dp),
                             onClick = {
+                                if (vm.isHapticEnabled()) {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                }
                                 if (Nip55.isSignerAvailable(this@ProcessTextActivity)) {
                                     getPublicKeyLauncher.launch(
                                         GetPublicKeyContract.Input(
@@ -239,7 +246,12 @@ class ProcessTextActivity : ComponentActivity() {
                         var showModeMenu by remember { mutableStateOf(false) }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { showModeMenu = true }.padding(8.dp)
+                            modifier = Modifier.clickable { 
+                                if (vm.isHapticEnabled()) {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                }
+                                showModeMenu = true 
+                            }.padding(8.dp)
                         ) {
                             Column {
                                 Text(vm.postKind.label, style = MaterialTheme.typography.titleMedium)
@@ -254,6 +266,9 @@ class ProcessTextActivity : ComponentActivity() {
                                     DropdownMenuItem(
                                         text = { Text(kind.label) },
                                         onClick = { 
+                                            if (vm.isHapticEnabled()) {
+                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            }
                                             vm.setKind(kind)
                                             showModeMenu = false 
                                         }
@@ -264,12 +279,20 @@ class ProcessTextActivity : ComponentActivity() {
                     },
                     actions = {
                         // Attach Media - Small
-                        IconButton(onClick = { pickMediaLauncher.launch("*/*") }) {
+                        IconButton(onClick = { 
+                            if (vm.isHapticEnabled()) {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            }
+                            pickMediaLauncher.launch("*/*") 
+                        }) {
                             Icon(Icons.Default.AddPhotoAlternate, "Attach Media") 
                         }
 
                         // Settings - Small
                         IconButton(onClick = {
+                            if (vm.isHapticEnabled()) {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            }
                             startActivity(Intent(this@ProcessTextActivity, SettingsActivity::class.java))
                         }) {
                              Icon(Icons.Default.Settings, "Settings")
@@ -297,7 +320,12 @@ class ProcessTextActivity : ComponentActivity() {
                         
                         // Discard (X)
                         FloatingActionButton(
-                            onClick = { vm.discardDraft() },
+                            onClick = { 
+                                if (vm.isHapticEnabled()) {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                }
+                                vm.discardDraft() 
+                            },
                             containerColor = MaterialTheme.colorScheme.errorContainer,
                             contentColor = MaterialTheme.colorScheme.onErrorContainer,
                             modifier = Modifier.padding(end = 16.dp)
@@ -307,7 +335,12 @@ class ProcessTextActivity : ComponentActivity() {
                         
                         // Resume (Check)
                         FloatingActionButton(
-                            onClick = { vm.applyDraft() },
+                            onClick = { 
+                                if (vm.isHapticEnabled()) {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                }
+                                vm.applyDraft() 
+                            },
                             modifier = Modifier.padding(end = 16.dp)
                         ) {
                             Icon(Icons.Default.Check, "Resume Draft")
@@ -321,7 +354,12 @@ class ProcessTextActivity : ComponentActivity() {
                              // Clear & Close Button (FAB Style)
                              Row(verticalAlignment = Alignment.CenterVertically) {
                                   FloatingActionButton(
-                                     onClick = { showConfirmClear = !showConfirmClear },
+                                     onClick = { 
+                                         if (vm.isHapticEnabled()) {
+                                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                         }
+                                         showConfirmClear = !showConfirmClear 
+                                     },
                                      containerColor = MaterialTheme.colorScheme.errorContainer,
                                      contentColor = MaterialTheme.colorScheme.onErrorContainer,
                                      modifier = Modifier.padding(start = 16.dp) 
@@ -338,6 +376,9 @@ class ProcessTextActivity : ComponentActivity() {
                                      Spacer(modifier = Modifier.width(16.dp))
                                      FloatingActionButton(
                                          onClick = { 
+                                             if (vm.isHapticEnabled()) {
+                                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                             }
                                              vm.clearContent()
                                              finish()
                                          },
@@ -360,6 +401,9 @@ class ProcessTextActivity : ComponentActivity() {
                         floatingActionButton = {
                             FloatingActionButton(
                                 onClick = {
+                                    if (vm.isHapticEnabled()) {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    }
                                     if (vm.pubkey == null) {
                                         if (Nip55.isSignerAvailable(this@ProcessTextActivity)) {
                                             getPublicKeyLauncher.launch(
@@ -501,6 +545,9 @@ class ProcessTextActivity : ComponentActivity() {
                                               .size(80.dp)
                                               .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
                                               .clickable {
+                                                  if (vm.isHapticEnabled()) {
+                                                      haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                  }
                                                   vm.uploadedMediaUrl?.let { url ->
                                                       clipboardManager.setText(AnnotatedString(url))
                                                       Toast.makeText(this@ProcessTextActivity, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
@@ -516,6 +563,9 @@ class ProcessTextActivity : ComponentActivity() {
                                               .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
                                               .background(Color.Black)
                                               .clickable {
+                                                  if (vm.isHapticEnabled()) {
+                                                      haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                  }
                                                   vm.uploadedMediaUrl?.let { url ->
                                                       clipboardManager.setText(AnnotatedString(url))
                                                       Toast.makeText(this@ProcessTextActivity, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
@@ -571,6 +621,9 @@ class ProcessTextActivity : ComponentActivity() {
                                   if (!vm.isUploading) {
                                       if (vm.uploadedMediaUrl != null) {
                                           IconButton(onClick = { 
+                                              if (vm.isHapticEnabled()) {
+                                                  haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                              }
                                               vm.uploadedMediaUrl?.let { url ->
                                                   clipboardManager.setText(AnnotatedString(url))
                                                   Toast.makeText(this@ProcessTextActivity, "URL copied", Toast.LENGTH_SHORT).show()
@@ -580,7 +633,12 @@ class ProcessTextActivity : ComponentActivity() {
                                           }
                                       }
                                       
-                                      IconButton(onClick = { vm.deleteMedia() }) {
+                                      IconButton(onClick = { 
+                                          if (vm.isHapticEnabled()) {
+                                              haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                          }
+                                          vm.deleteMedia() 
+                                      }) {
                                           Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error)
                                       }
                                   }
@@ -607,6 +665,7 @@ fun MediaDetailDialog(
     onDismiss: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         androidx.compose.material3.Surface(
@@ -697,29 +756,110 @@ fun MediaDetailDialog(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
                 
-                // Server Upload Results
-                if (vm.uploadServerResults.isNotEmpty()) {
-                    Text("Server Upload Status", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+                // Server Selection (Temporary for this upload)
+                if (vm.blossomServers.isNotEmpty() && vm.uploadedMediaUrl == null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Upload to Servers", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                     
-                    vm.uploadServerResults.forEach { (server, success) ->
+                    vm.blossomServers.forEach { server ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !vm.isUploading) { vm.toggleBlossomServer(server.url) }
+                                .padding(vertical = 4.dp)
                         ) {
-                            Icon(
-                                imageVector = if (success) Icons.Default.Check else Icons.Default.Close,
-                                contentDescription = if (success) "Success" else "Failed",
-                                tint = if (success) Color(0xFF4CAF50) else Color(0xFFF44336),
-                                modifier = Modifier.size(20.dp)
+                            Checkbox(
+                                checked = server.enabled,
+                                onCheckedChange = { vm.toggleBlossomServer(server.url) },
+                                enabled = !vm.isUploading
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                server,
-                                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                                text = server.url,
+                                style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                color = if (server.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                }
+
+                // Server Upload Results
+                if (vm.uploadServerResults.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Server Upload Status", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+                        
+                        val hasFailures = vm.uploadServerResults.any { !it.second }
+                        if (hasFailures && !vm.isUploading) {
+                            TextButton(
+                                onClick = { 
+                                    if (vm.isHapticEnabled()) {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    }
+                                    vm.retryFailedUploads(context) 
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Retry Failed", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    vm.uploadServerResults.forEach { (server, success) ->
+                        val serverHash = vm.uploadServerHashes[server]
+                        val localHash = vm.uploadedMediaHash
+                        val hashMatch = serverHash != null && serverHash == localHash
+                        
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = if (success) Icons.Default.Check else Icons.Default.Close,
+                                    contentDescription = if (success) "Success" else "Failed",
+                                    tint = if (success) Color(0xFF4CAF50) else Color(0xFFF44336),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    server,
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            // Show server-reported hash if available
+                            if (success && serverHash != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(start = 28.dp, top = 2.dp)
+                                ) {
+                                    Text(
+                                        "Hash: ${serverHash.take(12)}...",
+                                        style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                                        color = if (hashMatch) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        if (hashMatch) "✓ Match" else "⚠ Different",
+                                        style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                                        color = if (hashMatch) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                                    )
+                                }
+                            }
                         }
                     }
                 }

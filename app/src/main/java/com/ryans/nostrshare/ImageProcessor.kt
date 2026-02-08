@@ -8,43 +8,53 @@ import java.io.File
 import java.io.FileOutputStream
 
 object ImageProcessor {
-    fun processImage(context: Context, uri: Uri, mimeType: String?, compress: Boolean): Uri? {
+    data class ProcessResult(val uri: Uri, val mimeType: String)
+
+    fun processImage(context: Context, uri: Uri, mimeType: String?, compress: Boolean): ProcessResult? {
         try {
             val cacheDir = context.cacheDir
-            // Determine extension based on intended output
-            // If lossless JPEG -> .jpg
-            // If re-encode -> .jpg
-            val filename = "processed_${System.currentTimeMillis()}.jpg"
+            val normalizedMime = mimeType?.lowercase() ?: "image/jpeg"
+            val isJpeg = normalizedMime.contains("jpeg") || normalizedMime.contains("jpg")
+            val isPng = normalizedMime.contains("png")
+            
+            // Determine output extension and format
+            val outExtension = if (!compress && isPng) ".png" else ".jpg"
+            val filename = "processed_${System.currentTimeMillis()}$outExtension"
             val file = File(cacheDir, filename)
 
-            // OPTION A: Lossless Strip (Input is JPEG + No Compression requested)
-            if (!compress && (mimeType == "image/jpeg" || mimeType == "image/jpg")) {
-                val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-                val outputStream = FileOutputStream(file)
-                
-                val success = stripJpegMetadata(inputStream, outputStream)
-                
-                inputStream.close()
-                outputStream.close()
-                
-                if (success) {
-                    return Uri.fromFile(file)
+            // OPTION A: Surgical Strip (No Compression requested)
+            if (!compress) {
+                if (isJpeg || isPng) {
+                    val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+                    val outputStream = FileOutputStream(file)
+                    
+                    val success = if (isJpeg) {
+                        stripJpegMetadata(inputStream, outputStream)
+                    } else {
+                        stripPngMetadata(inputStream, outputStream)
+                    }
+                    
+                    inputStream.close()
+                    outputStream.close()
+                    
+                    if (success) {
+                        return ProcessResult(Uri.fromFile(file), if (isPng) "image/png" else "image/jpeg")
+                    }
+                    // If surgical failed, fall back to re-encode
                 }
-                // If lossless failed (e.g. malformed jpeg), fall back to re-encode
             }
 
-            // OPTION B: Re-encode (Compress requested OR Not JPEG OR Lossless failed)
+            // OPTION B: Re-encode (Compress requested OR Surgical failed)
             val inputStream = context.contentResolver.openInputStream(uri) ?: return null
             val bitmap = BitmapFactory.decodeStream(inputStream)
             inputStream.close()
             
-            if (bitmap == null) return null // decoding failed (e.g. video)
+            if (bitmap == null) return null 
             
             val outputStream = FileOutputStream(file)
             
-            // Re-encoding creates a new fresh image, stripping EXIF
             if (compress) {
-                // Resize if too big (simple scaling)
+                // Resize and convert to JPEG
                 var processedBitmap = bitmap
                 val maxDim = 1024
                 if (bitmap.width > maxDim || bitmap.height > maxDim) {
@@ -55,14 +65,19 @@ object ImageProcessor {
                 }
                 processedBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
             } else {
-                // High quality re-encode just to strip structure (fallback for non-JPEGs)
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                // Fallback high quality re-encode (only if surgical fails)
+                if (isPng) {
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+                } else {
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                }
             }
             
             outputStream.flush()
             outputStream.close()
             
-            return Uri.fromFile(file)
+            val outMime = if (!compress && isPng) "image/png" else "image/jpeg"
+            return ProcessResult(Uri.fromFile(file), outMime)
             
         } catch (e: Exception) {
             e.printStackTrace()
@@ -77,60 +92,46 @@ object ImageProcessor {
             data = input.read()
             if (data != 0xD8) return false // Not a JPEG
 
-            // Write SOI
             output.write(0xFF)
             output.write(0xD8)
 
             while (true) {
                 var marker = input.read()
-                while (marker != 0xFF) { // Find next marker prefix
-                    if (marker == -1) return false // EOF unexpected
-                    // Technically bytes between markers should be 0xFF if not data... but in strict structure we expect FF.
-                    // If we find raw data here outside SOS, stream is weird.
+                while (marker != 0xFF) { 
+                    if (marker == -1) return false 
                     marker = input.read()
                 }
                 
                 var type = input.read()
-                while (type == 0xFF) { type = input.read() } // Padding FFs
+                while (type == 0xFF) { type = input.read() } 
 
-                if (type == -1) break // EOF
+                if (type == -1) break 
 
-                // 2. Check Marker Type
-                // SOS = 0xDA. Start of Scan. Data follows.
-                if (type == 0xDA) {
+                if (type == 0xDA) { // SOS
                     output.write(0xFF)
                     output.write(type)
-                    // Copy remainder of stream (Scan Data)
                     input.copyTo(output)
                     return true
                 }
                 
-                // EOI = 0xD9. End of Image.
-                if (type == 0xD9) {
+                if (type == 0xD9) { // EOI
                     output.write(0xFF)
                     output.write(type)
                     return true
                 }
                 
-                // Read Length (High Low)
                 val lenHigh = input.read()
                 val lenLow = input.read()
                 if (lenHigh == -1 || lenLow == -1) return false
                 val length = (lenHigh shl 8) or lenLow
                 
-                // Determine if we keep or skip
-                // APP0 (0xE0) = JFIF (Keep)
-                // APP1 (0xE1) .. APP15 (0xEF) = Exif, XMP, etc (Skip)
-                // COM (0xFE) = Comment (Skip)
-                val isAppMarker = type in 0xE1..0xEF
-                val isComment = type == 0xFE
+                // MATCH BOUQUET: Only remove APP1 (0xE1). 
+                // Keep everything else (COM, APP0, APP2, etc.) to minimize restructuring.
+                val isExif = type == 0xE1
                 
-                if (isAppMarker || isComment) {
-                    // SKIP
-                    // length includes the 2 bytes for length itself. So skip length-2.
+                if (isExif) {
                     skipBytes(input, length - 2)
                 } else {
-                    // KEEP (DQT, DHT, SOF, APP0, etc)
                     output.write(0xFF)
                     output.write(type)
                     output.write(lenHigh)
@@ -140,7 +141,42 @@ object ImageProcessor {
             }
             return true
         } catch (e: Exception) {
-            e.printStackTrace()
+            return false
+        }
+    }
+
+    private fun stripPngMetadata(input: java.io.InputStream, output: java.io.OutputStream): Boolean {
+        try {
+            val signature = ByteArray(8)
+            if (input.read(signature) != 8) return false
+            if (!signature.contentEquals(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))) return false
+            
+            output.write(signature)
+
+            val buffer = ByteArray(8)
+            while (input.read(buffer, 0, 8) == 8) {
+                val length = ((buffer[0].toInt() and 0xFF) shl 24) or
+                             ((buffer[1].toInt() and 0xFF) shl 16) or
+                             ((buffer[2].toInt() and 0xFF) shl 8) or
+                             (buffer[3].toInt() and 0xFF)
+                
+                val type = String(buffer, 4, 4)
+                
+                // Metadata chunks to strip:
+                // eXIf (Exif)
+                // tEXt, zTXt, iTXt (Metadata / Comments)
+                val shouldStrip = type == "eXIf" || type == "tEXt" || type == "zTXt" || type == "iTXt"
+                
+                if (shouldStrip) {
+                    skipBytes(input, length + 4) // Data + CRC
+                } else {
+                    output.write(buffer)
+                    copyBytes(input, output, length + 4) // Data + CRC
+                    if (type == "IEND") return true
+                }
+            }
+            return true
+        } catch (e: Exception) {
             return false
         }
     }
