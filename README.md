@@ -13,8 +13,6 @@ The application uses a **keyless, stateless architecture**. It delegates all cry
 | :--- | :--- | :--- |
 | **NIP-01** | Basic Protocol | Core event publication and metadata fetching. |
 | **NIP-19** | bech32 Entities | Handling `npub`, `nprofile`, and `nevent` identifiers. |
-| **NIP-20** | Command Results | **OK** message processing for publication confirmation. |
-| **NIP-22** | Created At Limits | Handling relay-enforced timestamp boundaries. |
 | **NIP-55** | Android Signer Intent | **Required.** Offloading event signing to external apps. |
 | **NIP-65** | Relay Lists | Fetching user's read/write relays for broadcasting. |
 | **NIP-68** | Picture Notes | Specification for image-centric events (Kind 20). |
