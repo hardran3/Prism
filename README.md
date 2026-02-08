@@ -2,7 +2,7 @@
 
 **Prism** is an Android intent handler for the Nostr protocol. It bridges OS-level `ACTION_SEND` and `ACTION_PROCESS_TEXT` intents to the decentralized web.
 
-The application uses a **keyless, stateless architecture**. It delegates all cryptographic signing to **NIP-55** compliant apps (e.g., Amber, Gossip) and offloads media storage to Blossom servers. Private keys are never stored or accessed by Prism.
+The application uses a **keyless, stateless architecture**. It delegates all cryptographic signing to **NIP-55** compliant apps (e.g., Amber) and offloads media storage to Blossom servers. Private keys are never stored or accessed by Prism.
 
 ---
 
@@ -46,7 +46,7 @@ The application uses a **keyless, stateless architecture**. It delegates all cry
 
 ```bash
 # Clone repository
-git clone https://github.com/ryans/prism.git
+git clone https://github.com/hardran3/prism.git
 cd prism
 
 # Build Debug Variant
