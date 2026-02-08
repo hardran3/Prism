@@ -264,6 +264,27 @@ class RelayManager(
         
         return@withContext serverList.toList()
     }
+
+    fun createBlossomServerListEventJson(pubkey: String, servers: List<String>): String {
+        val event = JSONObject()
+        event.put("kind", 10063)
+        event.put("created_at", System.currentTimeMillis() / 1000)
+        event.put("pubkey", pubkey)
+        event.put("content", "")
+        
+        val tags = JSONArray()
+        servers.forEach { server ->
+            val tag = JSONArray()
+            tag.put("server")
+            tag.put(server)
+            tags.put(tag)
+        }
+        event.put("tags", tags)
+        event.put("id", "")
+        event.put("sig", "")
+        
+        return event.toString()
+    }
 }
 
 data class UserProfile(

@@ -43,6 +43,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 
 class ProcessTextActivity : ComponentActivity() {
 
@@ -147,12 +150,192 @@ class ProcessTextActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ShareScreen(viewModel)
+                    if (!viewModel.isOnboarded) {
+                        OnboardingScreen(viewModel)
+                    } else {
+                        ShareScreen(viewModel)
+                    }
                 }
             }
         }
     }
     
+    @Composable
+    fun OnboardingScreen(vm: ProcessTextViewModel) {
+        val step = vm.currentOnboardingStep
+        
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_prism),
+                contentDescription = null,
+                modifier = Modifier.size(100.dp).clip(CircleShape),
+                tint = Color.Unspecified
+            )
+            
+            Spacer(modifier = Modifier.height(32.dp))
+            
+            when (step) {
+                OnboardingStep.WELCOME -> {
+                    Text(
+                        text = "Welcome to Prism",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Text(
+                        text = "Prism makes it easy to share text, links, and media to the Nostr network. Connect your favorite NIP-55 signer up front to get started.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    Spacer(modifier = Modifier.height(48.dp))
+                    
+                    Button(
+                        onClick = {
+                            if (Nip55.isSignerAvailable(this@ProcessTextActivity)) {
+                                getPublicKeyLauncher.launch(
+                                    GetPublicKeyContract.Input(
+                                        permissions = listOf(
+                                            Permission.signEvent(9802),
+                                            Permission.signEvent(1),
+                                            Permission.signEvent(24242),
+                                            Permission.signEvent(20),
+                                            Permission.signEvent(22),
+                                            Permission.signEvent(10063)
+                                        ) 
+                                    )
+                                )
+                            } else {
+                                Toast.makeText(this@ProcessTextActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().height(56.dp)
+                    ) {
+                        Icon(Icons.Default.Person, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Sign in with Amber / Signer")
+                    }
+                }
+                OnboardingStep.SYNCING -> {
+                    Text(
+                        text = "Setting up your environment",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(
+                        text = "Finding your Blossom server list (Kind 10063) on your relays...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OnboardingStep.SERVER_SELECTION -> {
+                    Text(
+                        text = "Storage Centers",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Text(
+                        text = "Blossom servers store your media across the data-sovereign Nostr network, keeping you in control of your content.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Text(
+                        text = "We couldn't find a server list on your relays. We recommend picking at least 3 for reliability.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    // Local selection for the defaults
+                    val repoDefaults = remember { viewModel.getFallBackServers() }
+                    var selectedServers by remember { mutableStateOf(repoDefaults.map { it.url }.toSet()) }
+                    
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        repoDefaults.forEach { defaultServer ->
+                            val isSelected = selectedServers.contains(defaultServer.url)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { 
+                                        selectedServers = if (isSelected) {
+                                            selectedServers - defaultServer.url
+                                        } else {
+                                            selectedServers + defaultServer.url
+                                        }
+                                    }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { 
+                                        selectedServers = if (isSelected) {
+                                            selectedServers - defaultServer.url
+                                        } else {
+                                            selectedServers + defaultServer.url
+                                        }
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(defaultServer.url, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(32.dp))
+                    
+                    Button(
+                        onClick = {
+                            val serversToSave = repoDefaults.map { 
+                                BlossomServer(it.url, selectedServers.contains(it.url))
+                            }
+                            // Also ensure at least the checked ones are saved, or if none checked, maybe warn?
+                            // For now, just save exactly what they picked (enabled=true for picked).
+                            vm.finishOnboarding(serversToSave)
+                        },
+                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                        enabled = selectedServers.isNotEmpty()
+                    ) {
+                        Text("Save & Start Sharing")
+                    }
+                    
+                    TextButton(onClick = { 
+                        // Just use Primal/Band default and go
+                        vm.finishOnboarding(vm.blossomServers) 
+                    }) {
+                        Text("Skip for now")
+                    }
+                }
+            }
+        }
+    }
+
+
+
     @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
     @Composable
     fun ShareScreen(vm: ProcessTextViewModel) {
@@ -199,6 +382,8 @@ class ProcessTextActivity : ComponentActivity() {
                 }
             }
         }
+        
+
         
         // Handle Signed Result is in callback: vm.onSignedEventReceived -> vm.onEventSigned
 
@@ -919,5 +1104,6 @@ fun MediaDetailDialog(
             }
         }
     }
+
 }
 

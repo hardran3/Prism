@@ -5,13 +5,27 @@ import android.content.SharedPreferences
 
 data class BlossomServer(val url: String, val enabled: Boolean)
 
-class SettingsRepository(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("nostr_share_settings", Context.MODE_PRIVATE)
+class SettingsRepository(private val appContext: Context) {
+    private val prefs: SharedPreferences = appContext.getSharedPreferences("nostr_share_settings", Context.MODE_PRIVATE)
     
     private val defaultServers = listOf(
         BlossomServer("https://blossom.primal.net", true),
         BlossomServer("https://blossom.band", true)
     )
+
+    val fallBackBlossomServers = listOf(
+        "https://blossom.primal.net",
+        "https://blossom.band",
+        "https://cdn.nostrcheck.me",
+        "https://nostr.download",
+        "https://blossom.yakihonne.com/",
+        "https://files.sovbit.host"
+    )
+
+    fun isOnboarded(): Boolean {
+        val globalPrefs = appContext.getSharedPreferences("nostr_share_prefs", Context.MODE_PRIVATE)
+        return globalPrefs.getString("pubkey", null) != null
+    }
 
     fun isAlwaysUseKind1(): Boolean = prefs.getBoolean("always_kind_1", false)
     fun setAlwaysUseKind1(enabled: Boolean) = prefs.edit().putBoolean("always_kind_1", enabled).apply()

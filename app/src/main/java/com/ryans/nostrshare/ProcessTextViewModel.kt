@@ -19,6 +19,12 @@ import android.net.Uri
 import java.io.File
 import org.json.JSONObject
 
+enum class OnboardingStep {
+    WELCOME,
+    SYNCING,
+    SERVER_SELECTION
+}
+
 class ProcessTextViewModel : ViewModel() {
     var quoteContent by mutableStateOf("")
     var sourceUrl by mutableStateOf("")
@@ -29,6 +35,11 @@ class ProcessTextViewModel : ViewModel() {
     var npub by mutableStateOf<String?>(null) // Keep original npub for signer intent
     var signerPackageName by mutableStateOf<String?>(null)
     var userProfile by mutableStateOf<UserProfile?>(null)
+    
+    // Onboarding State
+    var isOnboarded by mutableStateOf(false)
+    var currentOnboardingStep by mutableStateOf(OnboardingStep.WELCOME)
+    var isSyncingServers by mutableStateOf(false)
 
     // Configured Blossom servers for the current session
     var blossomServers by mutableStateOf<List<BlossomServer>>(emptyList())
@@ -65,6 +76,15 @@ class ProcessTextViewModel : ViewModel() {
         
         // Initialize Blossom servers
         blossomServers = settingsRepository.getBlossomServers()
+        
+        val onboardedFromRepo = settingsRepository.isOnboarded()
+        // We consider someone onboarded if they have a pubkey AND at least some (non-factory-default) servers OR if they've explicitly finished it.
+        // For now, let's just stick to pubkey check but hide main UI until servers are ready.
+        isOnboarded = onboardedFromRepo && blossomServers.size > 2
+        
+        if (!isOnboarded) {
+            currentOnboardingStep = OnboardingStep.WELCOME
+        }
     }
 
     fun isHapticEnabled(): Boolean = settingsRepository.isHapticEnabled()
@@ -73,6 +93,8 @@ class ProcessTextViewModel : ViewModel() {
         pubkey = hexKey
         npub = npubKey
         signerPackageName = pkgName
+        currentOnboardingStep = OnboardingStep.SYNCING
+        isSyncingServers = true
         
         prefs.edit()
             .putString("pubkey", hexKey)
@@ -109,6 +131,7 @@ class ProcessTextViewModel : ViewModel() {
         val pk = pubkey ?: return
         viewModelScope.launch {
             try {
+                isSyncingServers = true
                 val discoveredUrls = relayManager.fetchBlossomServerList(pk)
                 if (discoveredUrls.isNotEmpty()) {
                     val currentServers = settingsRepository.getBlossomServers()
@@ -123,14 +146,36 @@ class ProcessTextViewModel : ViewModel() {
                     }
                     
                     if (newServers.size > currentServers.size) {
-                        settingsRepository.setBlossomServers(newServers)
                         blossomServers = newServers
+                        // If we found servers via 10063, we can likely just finish onboarding
+                        finishOnboarding(newServers)
+                    } else if (discoveredUrls.isNotEmpty()) {
+                        // Found list but no changes needed? Just finish.
+                        finishOnboarding(currentServers)
+                    } else {
+                        // No 10063 found
+                        currentOnboardingStep = OnboardingStep.SERVER_SELECTION
                     }
+                } else {
+                    // No 10063 found
+                    currentOnboardingStep = OnboardingStep.SERVER_SELECTION
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+            } finally {
+                isSyncingServers = false
             }
         }
+    }
+
+    fun finishOnboarding(servers: List<BlossomServer>) {
+        settingsRepository.setBlossomServers(servers)
+        blossomServers = servers
+        isOnboarded = true
+    }
+
+    fun getFallBackServers(): List<BlossomServer> {
+        return settingsRepository.fallBackBlossomServers.map { BlossomServer(it, true) }
     }
 
     fun updateQuote(newQuote: String) {

@@ -4,6 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import android.widget.Toast
+import android.content.Intent
+import com.ryans.nostrshare.nip55.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,12 +16,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Favorite
@@ -42,12 +48,44 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 
 class SettingsActivity : ComponentActivity() {
+    private val viewModel: SettingsViewModel by viewModels()
+
+    private val signEventLauncher = registerForActivityResult(SignEventContract()) { result ->
+        result.onSuccess { signed ->
+            if (!signed.signedEventJson.isNullOrBlank()) {
+                viewModel.onEventSigned(signed.signedEventJson)
+            }
+        }.onError { error ->
+            Toast.makeText(this, "Signing failed: ${error.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private val getPublicKeyLauncher = registerForActivityResult(GetPublicKeyContract()) { result ->
+        result.onSuccess { pkResult ->
+            viewModel.pubkey = pkResult.pubkey
+            viewModel.signerPackageName = pkResult.packageName
+            // Optional: refresh profile or something
+        }.onError { error ->
+            Toast.makeText(this, "Login failed: ${error.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val repo = SettingsRepository(this)
         
         setContent {
+            val eventToSign by viewModel.eventToSign.collectAsState()
+            
+            LaunchedEffect(eventToSign) {
+                eventToSign?.let { json ->
+                    val currentUser = viewModel.npub ?: viewModel.pubkey ?: ""
+                    val input = SignEventContract.Input(eventJson = json, currentUser = currentUser)
+                    signEventLauncher.launch(input)
+                }
+            }
+
             NostrShareTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -55,7 +93,11 @@ class SettingsActivity : ComponentActivity() {
                 ) {
                     SettingsScreen(
                         repo = repo,
-                        onBack = { finish() }
+                        viewModel = viewModel,
+                        onBack = { finish() },
+                        onLogin = {
+                            getPublicKeyLauncher.launch(GetPublicKeyContract.Input())
+                        }
                     )
                 }
             }
@@ -67,10 +109,20 @@ class SettingsActivity : ComponentActivity() {
 @Composable
 fun SettingsScreen(
     repo: SettingsRepository,
-    onBack: () -> Unit
+    viewModel: SettingsViewModel,
+    onBack: () -> Unit,
+    onLogin: () -> Unit
 ) {
     var selectedTabIndex by remember { mutableStateOf(0) }
     val tabs = listOf("General", "Blossom", "About")
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(viewModel.publishStatus) {
+        if (viewModel.publishStatus.isNotEmpty() && !viewModel.isPublishing) {
+            snackbarHostState.showSnackbar(viewModel.publishStatus)
+            viewModel.publishStatus = ""
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -89,11 +141,7 @@ fun SettingsScreen(
                 }
             )
         },
-        floatingActionButton = {
-            if (selectedTabIndex == 1) {
-                // Add Server FAB logic could go here, or handled within the tab content
-            }
-        }
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -112,7 +160,7 @@ fun SettingsScreen(
             
             when (selectedTabIndex) {
                 0 -> GeneralSettingsTab(repo)
-                1 -> BlossomSettingsTab(repo)
+                1 -> BlossomSettingsTab(repo, viewModel, onLogin)
                 2 -> AboutSettingsTab(repo)
             }
         }
@@ -156,7 +204,7 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
             )
         }
         
-        Divider(modifier = Modifier.padding(vertical = 16.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
         
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -179,7 +227,7 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
             )
         }
         
-        Divider(modifier = Modifier.padding(vertical = 16.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
         
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -202,7 +250,7 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
             )
         }
 
-        Divider(modifier = Modifier.padding(vertical = 16.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -228,60 +276,38 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
 }
 
 @Composable
-fun BlossomSettingsTab(repo: SettingsRepository) {
+fun BlossomSettingsTab(
+    repo: SettingsRepository,
+    viewModel: SettingsViewModel,
+    onLogin: () -> Unit
+) {
     var servers by remember { mutableStateOf(repo.getBlossomServers()) }
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(0f) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var showPublishConfirm by remember { mutableStateOf(false) }
     
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Sync Button Row
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.End
-        ) {
-            TextButton(
-                onClick = {
-                    if (repo.isHapticEnabled()) {
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                    }
-                    coroutineScope.launch {
-                        val rm = RelayManager(NostrShareApp.getInstance().client, repo)
-                        val prefs = NostrShareApp.getInstance().getSharedPreferences("nostr_share_prefs", android.content.Context.MODE_PRIVATE)
-                        val pk = prefs.getString("pubkey", null)
-                        if (pk != null) {
-                            val discovered = rm.fetchBlossomServerList(pk)
-                            val current = repo.getBlossomServers()
-                            val existing = current.map { it.url }.toSet()
-                            val updated = current.toMutableList()
-                            discovered.forEach { url ->
-                                val clean = url.trim().removeSuffix("/")
-                                if (!existing.contains(clean) && !existing.contains("$clean/")) {
-                                    updated.add(BlossomServer(clean, true))
-                                }
-                            }
-                            repo.setBlossomServers(updated)
-                            servers = updated
-                        }
-                    }
-                }
-            ) {
-                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Sync from Nostr")
-            }
+        if (viewModel.isPublishing) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = viewModel.publishStatus,
+                modifier = Modifier.padding(8.dp).align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodySmall
+            )
         }
 
         Box(modifier = Modifier.weight(1f)) {
             LazyColumn(
                 state = rememberLazyListState(),
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(servers.size, key = { index -> servers[index].url }) { index ->
@@ -302,7 +328,9 @@ fun BlossomSettingsTab(repo: SettingsRepository) {
                                     change.consume()
                                     dragOffset += dragAmount.y
                                     
-                                    val threshold = 50f
+                                    // Threshold should roughly match card height (approx 72dp including spacing)
+                                    // 72dp * 2.75 (avg density) ≈ 200f
+                                    val threshold = 180f 
                                     val currentIdx = currentIndex
                                     if (dragOffset > threshold && currentIdx < servers.size - 1) {
                                         val newServers = servers.toMutableList()
@@ -311,7 +339,8 @@ fun BlossomSettingsTab(repo: SettingsRepository) {
                                         servers = newServers
                                         repo.setBlossomServers(newServers)
                                         draggingItemIndex = currentIdx + 1
-                                        dragOffset = 0f
+                                        // Subtract the distance moved to keep item under finger
+                                        dragOffset -= threshold + 20f 
                                         if (repo.isHapticEnabled()) {
                                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                                         }
@@ -322,7 +351,8 @@ fun BlossomSettingsTab(repo: SettingsRepository) {
                                         servers = newServers
                                         repo.setBlossomServers(newServers)
                                         draggingItemIndex = currentIdx - 1
-                                        dragOffset = 0f
+                                        // Add back the distance moved
+                                        dragOffset += threshold + 20f
                                         if (repo.isHapticEnabled()) {
                                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                                         }
@@ -340,6 +370,7 @@ fun BlossomSettingsTab(repo: SettingsRepository) {
                         },
                         server = server,
                         isDragging = isDragging,
+                        dragOffset = if (isDragging) dragOffset else 0f,
                         onToggle = { enabled ->
                             val updated = servers.map { 
                                 if (it.url == server.url) it.copy(enabled = enabled) else it 
@@ -372,7 +403,47 @@ fun BlossomSettingsTab(repo: SettingsRepository) {
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Add Server")
             }
+
+            FloatingActionButton(
+                onClick = {
+                    if (repo.isHapticEnabled()) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    }
+                    showPublishConfirm = true
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp),
+                containerColor = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Icon(Icons.Default.Save, contentDescription = "Publish to Nostr")
+            }
         }
+    }
+
+    if (showPublishConfirm) {
+        AlertDialog(
+            onDismissRequest = { showPublishConfirm = false },
+            title = { Text("Publish to Nostr?") },
+            text = { Text("This will update your Blossom server list (Kind 10063) on your relays.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPublishConfirm = false
+                    if (viewModel.pubkey == null) {
+                        onLogin()
+                    } else {
+                        viewModel.publishBlossomList(servers.map { it.url })
+                    }
+                }) {
+                    Text("Publish")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPublishConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (showAddDialog) {
@@ -394,6 +465,7 @@ fun BlossomServerCard(
     modifier: Modifier = Modifier,
     server: BlossomServer,
     isDragging: Boolean = false,
+    dragOffset: Float = 0f,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit,
     repo: SettingsRepository
@@ -402,8 +474,17 @@ fun BlossomServerCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (isDragging) Modifier.graphicsLayer(alpha = 0.8f, scaleX = 1.02f, scaleY = 1.02f) else Modifier),
-        elevation = if (isDragging) CardDefaults.cardElevation(defaultElevation = 8.dp) else CardDefaults.cardElevation(defaultElevation = 2.dp)
+            .then(
+                if (isDragging) {
+                    Modifier.graphicsLayer {
+                        translationY = dragOffset
+                        alpha = 0.9f
+                        scaleX = 1.02f
+                        scaleY = 1.02f
+                    }
+                } else Modifier
+            ),
+        elevation = if (isDragging) CardDefaults.cardElevation(defaultElevation = 12.dp) else CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier
@@ -472,11 +553,12 @@ fun AboutSettingsTab(repo: SettingsRepository) {
     ) {
         // App Identity Section
         Spacer(modifier = Modifier.height(16.dp))
-        Icon(
+        Image(
             painter = painterResource(id = R.drawable.ic_prism),
             contentDescription = null,
-            modifier = Modifier.size(80.dp),
-            tint = MaterialTheme.colorScheme.primary
+            modifier = Modifier
+                .size(80.dp)
+                .clip(CircleShape)
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
@@ -485,7 +567,7 @@ fun AboutSettingsTab(repo: SettingsRepository) {
             color = MaterialTheme.colorScheme.onSurface
         )
         Text(
-            text = "Version 1.0.2",
+            text = "Version 1.0.3",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
