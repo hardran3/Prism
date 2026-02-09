@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import android.net.Uri
 import java.io.File
 import org.json.JSONObject
+import androidx.compose.runtime.mutableStateListOf
 
 enum class OnboardingStep {
     WELCOME,
@@ -36,6 +37,13 @@ class ProcessTextViewModel : ViewModel() {
     var signerPackageName by mutableStateOf<String?>(null)
     var userProfile by mutableStateOf<UserProfile?>(null)
     
+    // Highlight Metadata (NIP-84)
+    var highlightEventId by mutableStateOf<String?>(null)
+    var highlightAuthor by mutableStateOf<String?>(null)
+    var highlightKind by mutableStateOf<Int?>(null)
+    var highlightIdentifier by mutableStateOf<String?>(null)
+    var highlightRelays = mutableStateListOf<String>()
+    
     // Onboarding State
     var isOnboarded by mutableStateOf(false)
     var currentOnboardingStep by mutableStateOf(OnboardingStep.WELCOME)
@@ -53,8 +61,21 @@ class ProcessTextViewModel : ViewModel() {
     private val prefs by lazy { 
         NostrShareApp.getInstance().getSharedPreferences("nostr_share_prefs", Context.MODE_PRIVATE) 
     }
-    private val settingsRepository by lazy { SettingsRepository(NostrShareApp.getInstance()) }
+    val settingsRepository by lazy { SettingsRepository(NostrShareApp.getInstance()) }
     private val relayManager by lazy { RelayManager(NostrShareApp.getInstance().client, settingsRepository) }
+    
+    var isUploading by mutableStateOf(false)
+    var isDeleting by mutableStateOf(false)
+    var uploadStatus by mutableStateOf("")
+    var uploadServerResults by mutableStateOf<List<Pair<String, Boolean>>>(emptyList())
+    var deleteServerResults by mutableStateOf<List<Pair<String, Boolean>>>(emptyList())
+
+    // Legacy/Compat variables (Will be deprecated as multi-media matures)
+    var mediaUri by mutableStateOf<android.net.Uri?>(null)
+    var mediaMimeType by mutableStateOf<String?>(null)
+    var uploadedMediaUrl by mutableStateOf<String?>(null)
+    var uploadedMediaHash by mutableStateOf<String?>(null)
+    var uploadedMediaSize by mutableStateOf<Long?>(null)
 
     init {
         // Load persisted session
@@ -183,12 +204,78 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun updateSource(newSource: String) {
+        val oldSource = sourceUrl
         sourceUrl = newSource
         
         // Ensure URL is visible in text body if in NOTE mode
         if (postKind == PostKind.NOTE && newSource.isNotBlank() && !quoteContent.contains(newSource)) {
              val prefix = if (quoteContent.isNotBlank()) "\n\n" else ""
              quoteContent += "$prefix$newSource"
+        }
+
+        // Auto-extract Nostr Highlights
+        if (newSource.isNotBlank() && newSource != oldSource) {
+            val entity = NostrUtils.findNostrEntity(newSource)
+            if (entity != null && (entity.type == "nevent" || entity.type == "note" || entity.type == "naddr")) {
+                viewModelScope.launch {
+                    try {
+                        // Switch to Highlight mode automatically
+                        if (postKind != PostKind.HIGHLIGHT) {
+                             setKind(PostKind.HIGHLIGHT)
+                        }
+
+                        val event = if (entity.type == "naddr") {
+                            relayManager.fetchAddress(entity.kind!!, entity.author!!, entity.id, entity.relays)
+                        } else {
+                            relayManager.fetchEvent(entity.id, entity.relays)
+                        }
+                        
+                        if (event != null) {
+                            if (entity.type == "naddr") {
+                                val tags = event.optJSONArray("tags")
+                                var title: String? = null
+                                if (tags != null) {
+                                    for (i in 0 until tags.length()) {
+                                        val tag = tags.optJSONArray(i)
+                                        if (tag != null && tag.length() >= 2 && tag.optString(0) == "title") {
+                                            title = tag.getString(1)
+                                            break
+                                        }
+                                    }
+                                }
+                                if (title != null) {
+                                    quoteContent = title
+                                }
+                            } else {
+                                val content = event.optString("content")
+                                if (content.isNotBlank() && (quoteContent.isBlank() || quoteContent == oldSource)) {
+                                    quoteContent = content
+                                }
+                            }
+
+                            val authorPubkey = event.optString("pubkey")
+                            if (authorPubkey.isNotEmpty()) {
+                                val profile = relayManager.fetchUserProfile(authorPubkey)
+                                val authorName = profile?.name ?: authorPubkey.take(8)
+                                sourceUrl = "nostr:${entity.bech32}"
+                                
+                                // Store NIP-84 Metadata
+                                highlightEventId = event.optString("id")
+                                highlightAuthor = authorPubkey
+                                highlightKind = event.optInt("kind", 1)
+                                highlightIdentifier = if (entity.type == "naddr") entity.id else null
+                                highlightRelays.clear()
+                                highlightRelays.addAll(entity.relays)
+                                
+                                // If author was in entity but not in event (unlikely if fetch worked), use it as fallback
+                                if (highlightAuthor == null) highlightAuthor = entity.author
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
         }
     }
 
@@ -197,124 +284,113 @@ class ProcessTextViewModel : ViewModel() {
     private val blossomClient by lazy { BlossomClient(NostrShareApp.getInstance().client) }
     
     // Media State
-    var mediaUri by mutableStateOf<android.net.Uri?>(null)
-    var mediaMimeType by mutableStateOf<String?>(null)
-    var uploadedMediaUrl by mutableStateOf<String?>(null)
-    var uploadedMediaHash by mutableStateOf<String?>(null)
-    var uploadedMediaSize by mutableStateOf<Long?>(null)
-    var isUploading by mutableStateOf(false)
-    var isDeleting by mutableStateOf(false) // Track delete status
-    var uploadStatus by mutableStateOf("")
+    var mediaItems = mutableStateListOf<MediaUploadState>()
+    var processedMediaUris = mutableMapOf<String, Uri>() // id -> processedUri
     
     // New UX State
-    var showMediaDialog by mutableStateOf(false)
-    var isProcessingMedia by mutableStateOf(false)
+    var showSharingDialog by mutableStateOf(false)
+    var isBatchUploading by mutableStateOf(false)
+    var batchUploadStatus by mutableStateOf("")
+    var batchCompressionLevel by mutableStateOf<Int?>(null) // null = use global setting
+
+    val batchProgress: Float
+        get() {
+            if (mediaItems.isEmpty()) return 0f
+            val uploaded = mediaItems.count { it.uploadedUrl != null }
+            return uploaded.toFloat() / mediaItems.size.toFloat()
+        }
     
     // Dynamic Kind Selector
-    var availableKinds by mutableStateOf(listOf(PostKind.NOTE, PostKind.HIGHLIGHT)) // Default to Text options
-    
-    // Multi-server upload tracking
-    var uploadSuccessCount by mutableStateOf(0)
-    var uploadTotalCount by mutableStateOf(0)
-    var uploadServerResults by mutableStateOf<List<Pair<String, Boolean>>>(emptyList()) // (serverUrl, success)
-    var uploadServerHashes by mutableStateOf<Map<String, String?>>(emptyMap()) // serverUrl -> server-reported hash
-    var deleteServerResults by mutableStateOf<List<Pair<String, Boolean>>>(emptyList()) // (serverUrl, success)
+    var availableKinds by mutableStateOf(listOf(PostKind.NOTE, PostKind.HIGHLIGHT))
     
     // Signing Flow
-    enum class SigningPurpose { POST, UPLOAD_AUTH, DELETE_AUTH }
+    enum class SigningPurpose { POST, UPLOAD_AUTH, DELETE_AUTH, BATCH_UPLOAD_AUTH }
     var currentSigningPurpose = SigningPurpose.POST
-    var pendingAuthServerUrl: String? = null // To track which server we are authenticating for
+    var pendingAuthServerUrl: String? = null
+    var pendingAuthItemId: String? = null // To track which item we are authenticating for
 
-    fun onMediaSelected(context: Context, uri: android.net.Uri, mimeType: String) {
-        mediaUri = uri
-        mediaMimeType = mimeType
-        uploadedMediaUrl = null
-        uploadedMediaHash = null
-        uploadedMediaSize = null
-        processedMediaUri?.let { old ->
-            try {
-                if (old.scheme == "file") {
-                    File(old.path!!).delete()
-                }
-            } catch (_: Exception) {}
-        }
-        processedMediaUri = null
-        uploadServerResults = emptyList()
-        
-        // Refresh servers from repository once when media is selected
-        // This allows temporary toggles in the dialog until the upload starts
-        blossomServers = settingsRepository.getBlossomServers()
-        
-        // Auto-switch mode
-        if (mimeType.startsWith("video/") || mimeType.startsWith("image/")) {
-            availableKinds = listOf(PostKind.MEDIA, PostKind.NOTE) // Media + Note
+    fun onMediaSelected(context: Context, uris: List<android.net.Uri>) {
+        uris.forEach { uri ->
+            val mimeType = context.contentResolver.getType(uri) ?: "image/*"
+            val item = MediaUploadState(
+                id = java.util.UUID.randomUUID().toString(),
+                uri = uri,
+                mimeType = mimeType
+            )
+            mediaItems.add(item)
             
-            if (!settingsRepository.isAlwaysUseKind1()) {
-                setKind(PostKind.MEDIA)
+            // Auto-switch mode
+            if (mimeType.startsWith("video/") || mimeType.startsWith("image/")) {
+                availableKinds = listOf(PostKind.MEDIA, PostKind.NOTE)
+                if (!settingsRepository.isAlwaysUseKind1()) {
+                    setKind(PostKind.MEDIA)
+                }
             }
-            // Reset title when new media is selected
-            mediaTitle = "" 
+            
+            prepareMedia(context, item)
         }
         
-        // Show dialog immediately
-        showMediaDialog = true
-        
-        // Start background processing (Hash/Compress)
-        prepareMedia(context)
+        blossomServers = settingsRepository.getBlossomServers()
+        showSharingDialog = true
     }
     
-    private fun prepareMedia(context: Context) {
-        uploadStatus = "Processing media..."
-        isProcessingMedia = true
+    private fun prepareMedia(context: Context, item: MediaUploadState) {
+        item.status = "Processing..."
+        item.isProcessing = true
         
         viewModelScope.launch {
             try {
                 // 0. Process image (Always strip EXIF, optionally compress)
-                val isImage = mediaMimeType?.startsWith("image/") == true
+                val isImage = item.mimeType?.startsWith("image/") == true
+                var processedUri: Uri? = null
                 if (isImage) {
-                    uploadStatus = "Processing Image..."
-                    val shouldCompress = settingsRepository.isOptimizeMediaEnabled()
-                    val result = ImageProcessor.processImage(context, mediaUri!!, mediaMimeType, shouldCompress)
+                    item.status = "Optimizing..."
+                    val level = batchCompressionLevel ?: settingsRepository.getCompressionLevel()
+                    val result = ImageProcessor.processImage(context, item.uri, item.mimeType, level)
                     
                     if (result != null) {
-                        processedMediaUri = result.uri
-                        mediaMimeType = result.mimeType
-                    } else {
-                        processedMediaUri = null
+                        processedUri = result.uri
                     }
-                    lastProcessedWithOptimize = shouldCompress
                 }
                 
-                // 2. Localize if not already processed (ensures stable bytes for cloud URIs)
-                val stableUri = processedMediaUri ?: run {
-                    uploadStatus = "Localizing media..."
-                    val tempSource = File.createTempFile("blossom_source_", ".tmp", context.cacheDir)
-                    context.contentResolver.openInputStream(mediaUri!!).use { input ->
+                // 2. Localize if not already processed
+                val stableUri = processedUri ?: run {
+                    item.status = "Localizing..."
+                    val tempSource = File.createTempFile("blossom_source_${item.id}_", ".tmp", context.cacheDir)
+                    context.contentResolver.openInputStream(item.uri).use { input ->
                         tempSource.outputStream().use { output ->
                             input?.copyTo(output)
                         }
                     }
-                    val localizedUri = Uri.fromFile(tempSource)
-                    processedMediaUri = localizedUri
-                    localizedUri
+                    Uri.fromFile(tempSource)
                 }
+                processedMediaUris[item.id] = stableUri
                 
-                // 3. Hash and Size
-                uploadStatus = "Calculating Hash..."
-                val (hash, size) = blossomClient.hashFile(context, stableUri)
-                uploadedMediaHash = hash
-                uploadedMediaSize = size
+                item.status = "Hashing..."
+                val hashResult = blossomClient.hashFile(context, stableUri)
+                item.hash = hashResult.first
+                item.size = hashResult.second
                 
-                uploadStatus = "Ready to Upload"
-                isProcessingMedia = false
-                
+                item.status = "Ready"
+                item.isProcessing = false
             } catch (e: Exception) {
-                uploadStatus = "Error: ${e.message}"
-                isProcessingMedia = false
+                item.status = "Error: ${e.message}"
+                item.isProcessing = false
             }
         }
     }
 
+    fun updateBatchCompressionLevel(context: Context, level: Int) {
+        if (batchCompressionLevel == level) return
+        batchCompressionLevel = level
+        
+        // Re-process all images that aren't currently being uploaded or already finished
+        mediaItems.forEach { item ->
+             if (item.uploadedUrl == null && !item.isUploading) {
+                 prepareMedia(context, item)
+             }
+        }
+    }
     fun onHighlightShared() {
         if (!settingsRepository.isAlwaysUseKind1()) {
             setKind(PostKind.HIGHLIGHT)
@@ -327,62 +403,104 @@ class ProcessTextViewModel : ViewModel() {
     
     private var lastProcessedWithOptimize: Boolean? = null
 
-    fun initiateUploadAuth(context: Context) {
+    fun initiateUploadAuth(context: Context? = null, item: MediaUploadState) {
         val pk = pubkey ?: return
-        if (mediaUri == null) return
         
-        val shouldCompress = settingsRepository.isOptimizeMediaEnabled()
-        
-        // Finalize preparation or re-run if settings changed
-        if (processedMediaUri == null || lastProcessedWithOptimize != shouldCompress) {
-            prepareMedia(context)
-            return 
+        val stableUri = processedMediaUris[item.id]
+        if (stableUri == null) {
+            item.status = "File not localized."
+            return
         }
-// Removed: blossomServers = settingsRepository.getBlossomServers()
-        // This was overwriting temporary toggles. Refresh is now in onMediaSelected.
         
-        // Assume preparation is done
-        val hash = uploadedMediaHash
-        val size = uploadedMediaSize
-        if (hash == null || size == null) {
-             uploadStatus = "Media preparation not finished. (Hash: ${hash != null}, Size: ${size != null})"
+        val hash = item.hash
+        val size = item.size
+        if (hash == null || size == 0L) {
+             item.status = "Hash/Size missing."
              return
         }
         
-        uploadStatus = "Preparing upload auth..."
-        isUploading = true
+        item.status = "Preparing auth..."
+        item.isUploading = true
         
         viewModelScope.launch {
             try {
                 // Use latest servers
                 val servers = blossomServers.filter { it.enabled }.map { it.url }
-                if (servers.isEmpty()) {
-                    pendingServers = listOf("https://blossom.primal.net")
-                } else {
-                    pendingServers = servers
-                }
-                
-                // Initialize tracking
-                uploadTotalCount = pendingServers.size
-                uploadSuccessCount = 0
-                uploadServerResults = emptyList()
+                val targetServers = if (servers.isEmpty()) listOf("https://blossom.primal.net") else servers
+                item.pendingServers = targetServers
                 
                 // Use first server for auth
-                pendingAuthServerUrl = pendingServers.firstOrNull() ?: "https://blossom.primal.net"
+                val authServer = targetServers.firstOrNull() ?: "https://blossom.primal.net"
+                pendingAuthServerUrl = authServer
+                pendingAuthItemId = item.id
                 
                 // For Upload, operation is "upload" (default)
-                val fileName = processedMediaUri?.lastPathSegment
-                val authEventJson = blossomClient.createAuthEventJson(hash, size, pk, "upload", fileName = fileName, mimeType = mediaMimeType)
+                val fileName = stableUri.lastPathSegment
+                val authEventJson = blossomClient.createAuthEventJson(hash, size, pk, "upload", fileName = fileName, mimeType = item.mimeType)
                 
                 // 3. Ask Activity to Sign
                 currentSigningPurpose = SigningPurpose.UPLOAD_AUTH
                 _eventToSign.value = authEventJson
                 
             } catch (e: Exception) {
-                uploadStatus = "Error preparing: ${e.message}"
-                isUploading = false
+                item.status = "Auth Error: ${e.message}"
+                item.isUploading = false
             }
         }
+    }
+
+    fun initiateBatchUpload(context: Context) {
+        val pk = pubkey ?: return
+        val itemsToUpload = mediaItems.filter { it.uploadedUrl == null && !it.isUploading && !it.isProcessing }
+        if (itemsToUpload.isEmpty()) {
+            isBatchUploading = false
+            return
+        }
+
+        isBatchUploading = true
+        batchUploadStatus = "Starting sequential upload..."
+        
+        // Start the first one - it will trigger subsequent ones in finalizeUpload
+        val first = itemsToUpload.first()
+        initiateUploadAuth(context, first)
+    }
+
+    fun resetBatchState() {
+        isBatchUploading = false
+        batchUploadStatus = ""
+        mediaItems.forEach { item ->
+            if (item.isUploading && item.uploadedUrl == null) {
+                item.isUploading = false
+                item.status = "Ready"
+            }
+        }
+    }
+
+    private var pendingBatchItemIds: List<String> = emptyList()
+    private val _batchEventsToSign = MutableStateFlow<List<String>>(emptyList())
+    val batchEventsToSign: StateFlow<List<String>> = _batchEventsToSign.asStateFlow()
+
+    fun onBatchEventsSigned(signedEvents: List<String>) {
+        val ids = pendingBatchItemIds
+        if (signedEvents.size != ids.size) {
+             batchUploadStatus = "Signature mismatch"
+             isBatchUploading = false
+             return
+        }
+
+        signedEvents.forEachIndexed { index, signedEvent ->
+            val itemId = ids[index]
+            val item = mediaItems.find { it.id == itemId }
+            if (item != null) {
+                finalizeUpload(item, signedEvent)
+            }
+        }
+        
+        _batchEventsToSign.value = emptyList()
+        pendingBatchItemIds = emptyList()
+        // isBatchUploading will be set to false when all items finish (we need a way to track that)
+        // Or we just let it be true until we navigate away? 
+        // For now, let's monitor the items.
     }
     
     fun retryFailedUploads(context: Context) {
@@ -415,34 +533,32 @@ class ProcessTextViewModel : ViewModel() {
     // Store the hash that will be used for the current delete operation
     private var pendingDeleteHash: String? = null
 
-    fun deleteMedia() {
-        val localHash = uploadedMediaHash ?: return
+    fun deleteMedia(item: MediaUploadState) {
+        val localHash = item.hash ?: return
         val pk = pubkey ?: return
         
         viewModelScope.launch {
             try {
-                 uploadStatus = "Preparing delete..."
-                 isDeleting = true // Set deleting flag early
+                 item.status = "Preparing delete..."
+                 item.isProcessing = true
                  
-                 // Use temporary servers from VM state
                  val servers = blossomServers.filter { it.enabled }.map { it.url }
-                 if (servers.isNotEmpty()) {
-                     pendingServers = servers
-                 } else {
-                     pendingServers = listOf("https://blossom.primal.net")
-                 }
-                 pendingAuthServerUrl = pendingServers.firstOrNull()
+                 val targetServers = if (servers.isNotEmpty()) servers else listOf("https://blossom.primal.net")
+                 item.pendingServers = targetServers
+                 
+                 pendingAuthServerUrl = targetServers.firstOrNull()
+                 pendingAuthItemId = item.id
                  
                  // Use server-reported hash from the first server, fall back to local hash
-                 val hashForAuth = pendingServers.firstNotNullOfOrNull { uploadServerHashes[it] } ?: localHash
-                 pendingDeleteHash = hashForAuth
+                 val hashForAuth = targetServers.firstNotNullOfOrNull { item.serverHashes.value[it] } ?: localHash
+                 item.hash = hashForAuth // Temporary until finalized
                  
                  val authEventJson = blossomClient.createAuthEventJson(hashForAuth, null, pk, "delete")
                  currentSigningPurpose = SigningPurpose.DELETE_AUTH
                  _eventToSign.value = authEventJson
             } catch (e: Exception) {
-                uploadStatus = "Delete prepare failed: ${e.message}"
-                isDeleting = false
+                item.status = "Delete Error: ${e.message}"
+                item.isProcessing = false
             }
         }
     }
@@ -454,22 +570,34 @@ class ProcessTextViewModel : ViewModel() {
     val eventToSign: StateFlow<String?> = _eventToSign.asStateFlow()
     
     fun onEventSigned(signedEventJson: String) {
+        val itemId = pendingAuthItemId
+        val item = mediaItems.find { it.id == itemId }
+        
         when (currentSigningPurpose) {
             SigningPurpose.POST -> publishPost(signedEventJson)
-            SigningPurpose.UPLOAD_AUTH -> finalizeUpload(signedEventJson)
-            SigningPurpose.DELETE_AUTH -> finalizeDelete(signedEventJson)
+            SigningPurpose.UPLOAD_AUTH -> {
+                if (item != null) finalizeUpload(item, signedEventJson)
+            }
+            SigningPurpose.DELETE_AUTH -> {
+                if (item != null) finalizeDelete(item, signedEventJson)
+            }
+            SigningPurpose.BATCH_UPLOAD_AUTH -> {
+                // Should use onBatchEventsSigned instead
+            }
         }
         _eventToSign.value = null // Reset
+        pendingAuthItemId = null
     }
 
-    private fun finalizeDelete(signedAuthEvent: String) {
-        val hashToDelete = pendingDeleteHash ?: uploadedMediaHash ?: return
-        val servers = pendingServers
+    private fun finalizeDelete(item: MediaUploadState, signedAuthEvent: String) {
+        val hashToDelete = item.hash ?: return
+        val servers = item.pendingServers
         
         viewModelScope.launch {
             try {
                 isDeleting = true
-                uploadStatus = "Deleting from ${servers.size} servers..."
+                val urlToRemove = item.uploadedUrl
+                uploadStatus = if (urlToRemove != null) "Deleting $urlToRemove..." else "Deleting from ${servers.size} servers..."
                 
                 val results = mutableListOf<Pair<String, Boolean>>()
                 
@@ -491,40 +619,58 @@ class ProcessTextViewModel : ViewModel() {
                 deleteServerResults = results.toList()
                 val successCount = results.count { it.second }
                 
-                uploadStatus = "Deleted from $successCount/${servers.size} servers."
+                item.status = "Deleted from $successCount/${servers.size} servers."
                 
-                // Clear state regardless of full success
-                uploadedMediaUrl = null
-                uploadedMediaHash = null
-                uploadedMediaSize = null
-                mediaUri = null
-                processedMediaUri = null
+                // Remove item from list if fully deleted? Or just mark it.
+                // For now, let's keep it in list but clear URLs.
+                if (uploadedMediaUrl == item.uploadedUrl) {
+                    uploadedMediaUrl = null
+                    uploadedMediaHash = null
+                    uploadedMediaSize = null
+                }
+                
+                item.uploadedUrl = null
+                item.hash = null
+                item.size = 0L
+                processedMediaUris.remove(item.id)
+                mediaItems.remove(item)
+
+                // Remove from quoteContent if in NOTE mode
+                if (postKind == PostKind.NOTE && urlToRemove != null) {
+                    var content = quoteContent.trim()
+                    if (content.endsWith(urlToRemove)) {
+                        content = content.removeSuffix(urlToRemove).trim()
+                    } else if (content.contains(urlToRemove)) {
+                        content = content.replace(urlToRemove, "").replace("\n\n\n", "\n\n").trim()
+                    }
+                    quoteContent = content
+                }
                 
             } catch (e: Exception) {
-                uploadStatus = "Delete error: ${e.message}"
+                item.status = "Delete error: ${e.message}"
             } finally {
-                isDeleting = false
+                item.isProcessing = false
             }
         }
     }
 
-    private fun finalizeUpload(signedAuthEvent: String) {
-        // Use processed URI if available, otherwise original
-        val uri = processedMediaUri ?: mediaUri ?: return
-        val servers = pendingServers
+    private fun finalizeUpload(item: MediaUploadState, signedAuthEvent: String) {
+        val uri = processedMediaUris[item.id] ?: item.uri
+        val servers = item.pendingServers
         if (servers.isEmpty()) return
         
         viewModelScope.launch {
-            uploadStatus = "Uploading to ${servers.size} server(s)..."
+            item.status = "Uploading to ${servers.size} server(s)..."
+            item.isUploading = true
             
             // Read file into memory ONCE to guarantee bit-perfect consistency
             val fileBytes = try {
-                File(uri.path!!).readBytes()
+                NostrShareApp.getInstance().contentResolver.openInputStream(uri)?.use { it.readBytes() }
             } catch (e: Exception) {
-                uploadStatus = "Failed to read media: ${e.message}"
-                isUploading = false
-                return@launch
-            }
+                item.status = "Failed to read media: ${e.message}"
+                item.isUploading = false
+                null
+            } ?: return@launch
 
             // Upload to ALL servers in parallel
             val serverResults = mutableListOf<Pair<String, Boolean>>()
@@ -540,7 +686,7 @@ class ProcessTextViewModel : ViewModel() {
                                 fileBytes,
                                 signedAuthEvent,
                                 server,
-                                mediaMimeType
+                                item.mimeType
                             )
                             synchronized(serverResults) {
                                 serverResults.add(server to true)
@@ -562,43 +708,55 @@ class ProcessTextViewModel : ViewModel() {
             // Priority Check: Pick the first successful URL according to the original order
             val firstSuccessUrl = servers.firstNotNullOfOrNull { successfulUrls[it] }
             
-            // Update state (Merge with existing results if this was a retry)
-            val oldResults = uploadServerResults.toMap()
-            val mergedResults = blossomServers.filter { it.enabled }.map { server ->
-                val url = server.url
-                val success = successfulUrls.containsKey(url) || (oldResults[url] ?: false)
-                url to success
-            }
-            
-            uploadServerResults = if (mergedResults.isNotEmpty()) mergedResults else serverResults.toList()
-            uploadSuccessCount = uploadServerResults.count { it.second }
-            
-            // Store server-reported hashes for UI display
-            val existingHashes = uploadServerHashes.toMutableMap()
-            existingHashes.putAll(serverHashes)
-            uploadServerHashes = existingHashes
+            // Update item state
+            item.serverResults.value = serverResults
+            item.serverHashes.value = serverHashes.filterValues { it != null }.mapValues { it.value!! }
             
             if (firstSuccessUrl != null) {
-                uploadedMediaUrl = firstSuccessUrl
-                uploadStatus = "Uploaded to $uploadSuccessCount/$uploadTotalCount servers"
+                item.uploadedUrl = firstSuccessUrl
+                val successCount = serverResults.count { it.second }
+                item.status = "Uploaded to $successCount/${servers.size} servers"
                 
+                // Sync legacy variables for top item if it's the first one
+                if (mediaItems.firstOrNull()?.id == item.id) {
+                    uploadedMediaUrl = item.uploadedUrl
+                    uploadedMediaHash = item.hash
+                    uploadedMediaSize = item.size
+                }
+
                 // If in NOTE mode, append URL to content now
                 if (postKind == PostKind.NOTE) {
                      val prefix = if (quoteContent.isNotBlank()) "\n\n" else ""
                      quoteContent += "$prefix$firstSuccessUrl"
                 }
             } else {
-                uploadStatus = "All uploads failed"
+                item.status = "All uploads failed"
             }
             
-            isUploading = false
+            item.isUploading = false
+            
+            // If we were batch uploading, check if all items are now finished
+            if (isBatchUploading) {
+                val stillUploading = mediaItems.any { it.isUploading }
+                if (!stillUploading) {
+                    val nextItem = mediaItems.find { it.uploadedUrl == null && !it.isUploading && !it.isProcessing }
+                    if (nextItem != null) {
+                         batchUploadStatus = "Uploading next item..."
+                         initiateUploadAuth(null, nextItem)
+                    } else {
+                        isBatchUploading = false
+                        batchUploadStatus = "Batch Complete"
+                        showSharingDialog = false // Auto-dismiss
+                    }
+                }
+            }
         }
     }
-
     enum class PostKind(val kind: Int, val label: String) {
         NOTE(1, "Note"), 
         HIGHLIGHT(9802, "Highlight"),
-        MEDIA(0, "Media") // Kind will be determined dynamically (20 or 22)
+        MEDIA(0, "Media"), // Kind will be determined dynamically (20 or 22)
+        FILE_METADATA(1063, "File Meta")
     }
     
     var postKind by mutableStateOf(PostKind.NOTE)
@@ -723,17 +881,18 @@ class ProcessTextViewModel : ViewModel() {
         val oldKind = postKind
         postKind = kind
         
-        // URLs to manage
-        val mediaUrl = uploadedMediaUrl
         val sUrl = sourceUrl
         
         // 1. Cleanup Phase: If leaving NOTE, remove auto-added URLs
         if (oldKind == PostKind.NOTE && kind != PostKind.NOTE) {
-            var content = quoteContent.trim() // Trim to ensure endsWith matches
+            var content = quoteContent.trim()
             
-            // Remove Media URL if at end
-            if (mediaUrl != null && content.endsWith(mediaUrl)) {
-                content = content.removeSuffix(mediaUrl).trim()
+            // Remove all media URLs from the end in reverse order
+            mediaItems.reversed().forEach { item ->
+                val mUrl = item.uploadedUrl
+                if (mUrl != null && content.endsWith(mUrl)) {
+                    content = content.removeSuffix(mUrl).trim()
+                }
             }
             
             // Remove Source URL if at end
@@ -741,9 +900,12 @@ class ProcessTextViewModel : ViewModel() {
                  content = content.removeSuffix(sUrl).trim()
             }
             
-            // Re-check Media URL (in case order was different)
-            if (mediaUrl != null && content.endsWith(mediaUrl)) {
-                content = content.removeSuffix(mediaUrl).trim()
+            // Re-check media URLs (in case of interleaved order)
+            mediaItems.reversed().forEach { item ->
+                val mUrl = item.uploadedUrl
+                if (mUrl != null && content.endsWith(mUrl)) {
+                    content = content.removeSuffix(mUrl).trim()
+                }
             }
             
             quoteContent = content
@@ -753,14 +915,19 @@ class ProcessTextViewModel : ViewModel() {
         if (kind == PostKind.NOTE) {
             var content = quoteContent
             
+            // Append Source URL
             if (sUrl.isNotBlank() && !content.contains(sUrl)) {
                  val prefix = if (content.isNotBlank()) "\n\n" else ""
                  content += "$prefix$sUrl"
             }
             
-            if (mediaUrl != null && !content.contains(mediaUrl)) {
-                 val prefix = if (content.isNotBlank()) "\n\n" else ""
-                 content += "$prefix$mediaUrl"
+            // Append ALL successful media URLs
+            mediaItems.forEach { item ->
+                val mUrl = item.uploadedUrl
+                if (mUrl != null && !content.contains(mUrl)) {
+                    val prefix = if (content.isNotBlank()) "\n\n" else ""
+                    content += "$prefix$mUrl"
+                }
             }
             
             quoteContent = content
@@ -788,10 +955,13 @@ class ProcessTextViewModel : ViewModel() {
                  if (sourceUrl.isNotBlank() && !content.contains(sourceUrl)) {
                      content += "\n\n$sourceUrl"
                  }
-                 // Append media URL if present and not already in content
-                 if (uploadedMediaUrl != null && !content.contains(uploadedMediaUrl!!)) {
-                     val prefix = if (content.isNotBlank()) "\n\n" else ""
-                     content += "$prefix$uploadedMediaUrl"
+                 // Append all uploaded media URLs
+                 mediaItems.filter { it.uploadedUrl != null }.forEach { item ->
+                    val url = item.uploadedUrl!!
+                    if (!content.contains(url)) {
+                        val prefix = if (content.isNotBlank()) "\n\n" else ""
+                        content += "$prefix$url"
+                    }
                  }
                  
                  event.put("content", content)
@@ -800,13 +970,32 @@ class ProcessTextViewModel : ViewModel() {
              PostKind.HIGHLIGHT -> {
                  event.put("kind", 9802)
                  event.put("content", quoteContent.trim())
-                 if (sourceUrl.isNotBlank()) tags.put(org.json.JSONArray().put("r").put(sourceUrl))
-                 tags.put(org.json.JSONArray().put("alt").put("Highlight: \"${quoteContent.take(50)}...\""))
+                 
+                 // NIP-84 Compliance
+                 if (highlightEventId != null) {
+                     tags.put(org.json.JSONArray().put("e").put(highlightEventId))
+                 }
+                 if (highlightAuthor != null) {
+                     tags.put(org.json.JSONArray().put("p").put(highlightAuthor))
+                 }
+                 if (highlightKind != null) {
+                     tags.put(org.json.JSONArray().put("k").put(highlightKind.toString()))
+                 }
+                 if (highlightIdentifier != null && highlightAuthor != null && highlightKind != null) {
+                     tags.put(org.json.JSONArray().put("a").put("${highlightKind}:${highlightAuthor}:${highlightIdentifier}"))
+                 }
+
+                 if (sourceUrl.isNotBlank()) {
+                     tags.put(org.json.JSONArray().put("r").put(sourceUrl))
+                 }
+                 val altText = if (highlightKind == 1) "A Short Note" else "Highlight: \"${quoteContent.take(50)}...\""
+                 tags.put(org.json.JSONArray().put("alt").put(altText))
                  event.put("tags", tags)
              }
              PostKind.MEDIA -> {
-                 // Determine kind
-                 val kind = if (mediaMimeType?.startsWith("image/") == true) 20 else 22
+                 // Determine kind based on first item
+                 val firstMime = mediaItems.firstOrNull()?.mimeType ?: "image/"
+                 val kind = if (firstMime.startsWith("image/")) 20 else 22
                  event.put("kind", kind)
                  
                  // content is description
@@ -816,57 +1005,110 @@ class ProcessTextViewModel : ViewModel() {
                  val title = if (mediaTitle.isNotBlank()) mediaTitle else "My $label"
                  tags.put(org.json.JSONArray().put("title").put(title))
                  
-                 if (uploadedMediaUrl != null) {
+                 mediaItems.filter { it.uploadedUrl != null }.forEach { item ->
                      val imeta = org.json.JSONArray()
                      imeta.put("imeta")
-                     imeta.put("url $uploadedMediaUrl")
-                     if (mediaMimeType != null) imeta.put("m $mediaMimeType")
-                     if (uploadedMediaHash != null) imeta.put("x $uploadedMediaHash")
+                     imeta.put("url ${item.uploadedUrl}")
+                     item.mimeType?.let { imeta.put("m $it") }
+                     item.hash?.let { imeta.put("x $it") }
+                     if (item.size > 0) imeta.put("size ${item.size}")
+                     
+                     // Add imeta to tags
                      tags.put(imeta)
                      
-                     // Add legacy "url" tag for broader compatibility
-                     tags.put(org.json.JSONArray().put("url").put(uploadedMediaUrl))
+                     // Add top-level tags for filtering/compatibility
+                     item.mimeType?.let { tags.put(org.json.JSONArray().put("m").put(it)) }
+                     item.hash?.let { tags.put(org.json.JSONArray().put("x").put(it)) }
+                     tags.put(org.json.JSONArray().put("url").put(item.uploadedUrl))
                  }
                  event.put("tags", tags)
+             }
+             PostKind.FILE_METADATA -> {
+                 // Single event fallback if called for 1063 directly (unlikely due to bulk logic)
+                 val firstItem = mediaItems.firstOrNull { it.uploadedUrl != null }
+                 if (firstItem != null) {
+                     event.put("kind", 1063)
+                     event.put("content", quoteContent.trim())
+                     tags.put(org.json.JSONArray().put("url").put(firstItem.uploadedUrl))
+                     firstItem.mimeType?.let { tags.put(org.json.JSONArray().put("m").put(it)) }
+                     firstItem.hash?.let { tags.put(org.json.JSONArray().put("x").put(it)) }
+                     event.put("tags", tags)
+                 }
              }
         }
         return event.toString()
 
     }
 
+    fun prepareBulkFileMetadataEvents(): List<String> {
+        val events = mutableListOf<String>()
+        mediaItems.filter { it.uploadedUrl != null }.forEach { item ->
+            val event = JSONObject()
+            event.put("created_at", System.currentTimeMillis() / 1000)
+            event.put("pubkey", pubkey ?: "")
+            event.put("kind", 1063)
+            event.put("content", quoteContent.trim()) // Optional description
+            
+            val tags = org.json.JSONArray()
+            tags.put(org.json.JSONArray().put("url").put(item.uploadedUrl))
+            item.mimeType?.let { tags.put(org.json.JSONArray().put("m").put(it)) }
+            item.hash?.let { tags.put(org.json.JSONArray().put("x").put(it)) }
+            item.size.takeIf { it > 0 }?.let { tags.put(org.json.JSONArray().put("size").put(it.toString())) }
+            
+            // Add title if present
+            if (mediaTitle.isNotBlank()) tags.put(org.json.JSONArray().put("title").put(mediaTitle))
+            
+            event.put("tags", tags)
+            events.add(event.toString())
+        }
+        return events
+    }
+
     private fun publishPost(signedEventJson: String) {
+        publishPosts(listOf(signedEventJson))
+    }
+
+    fun publishPosts(signedEventsJson: List<String>) {
         isPublishing = true
         publishSuccess = null
         publishStatus = "Fetching relay list..."
         viewModelScope.launch {
             try {
-                // Use IO dispatcher
                 val relays = withContext(Dispatchers.IO) {
                     try {
                         val fetched = relayManager.fetchRelayList(pubkey!!)
-                        if (fetched.isEmpty()) {
-                            listOf("wss://relay.damus.io", "wss://nos.lol")
-                        } else {
-                            fetched
-                        }
+                        if (fetched.isEmpty()) listOf("wss://relay.damus.io", "wss://nos.lol") else fetched
                     } catch (e: Exception) {
-                        e.printStackTrace()
                         listOf("wss://relay.damus.io", "wss://nos.lol")
                     }
                 }
                 
-                publishStatus = "Broadcasting to ${relays.size} relays..."
-                val results = withContext(Dispatchers.IO) {
-                     relayManager.publishEvent(signedEventJson, relays)
+                publishStatus = "Broadcasting ${signedEventsJson.size} post(s) to ${relays.size} relays..."
+                val relaySuccessMap = mutableMapOf<String, Boolean>()
+                relays.forEach { relaySuccessMap[it] = false }
+                
+                var totalPostSuccess = 0
+                signedEventsJson.forEach { signedEvent ->
+                    val results = withContext(Dispatchers.IO) {
+                         relayManager.publishEvent(signedEvent, relays)
+                    }
+                    if (results.any { it.value }) {
+                        totalPostSuccess++
+                    }
+                    results.forEach { (relay, success) ->
+                        if (success) {
+                            relaySuccessMap[relay] = true
+                        }
+                    }
                 }
                 
-                val successCount = results.count { entry -> entry.value }
                 delay(1000)
                 
-                if (successCount > 0) {
-                    publishStatus = "Success! Published to $successCount relays."
+                val successfulRelaysCount = relaySuccessMap.count { it.value }
+                if (totalPostSuccess > 0) {
+                    publishStatus = "Success! Published to $successfulRelaysCount/${relays.size} relays."
                     publishSuccess = true
-                    discardDraft() // Clear draft on success
+                    discardDraft()
                 } else {
                     publishStatus = "Failed to publish."
                     publishSuccess = false

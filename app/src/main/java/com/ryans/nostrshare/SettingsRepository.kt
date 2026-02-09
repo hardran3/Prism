@@ -8,10 +8,18 @@ data class BlossomServer(val url: String, val enabled: Boolean)
 class SettingsRepository(private val appContext: Context) {
     private val prefs: SharedPreferences = appContext.getSharedPreferences("nostr_share_settings", Context.MODE_PRIVATE)
     
-    private val defaultServers = listOf(
+    private val onboardDefaults = listOf(
         BlossomServer("https://blossom.primal.net", true),
         BlossomServer("https://blossom.band", true)
     )
+    
+    companion object {
+        const val COMPRESSION_NONE = 0
+        const val COMPRESSION_MEDIUM = 1
+        const val COMPRESSION_HIGH = 2
+    }
+
+    private val defaultServers = emptyList<BlossomServer>()
 
     val fallBackBlossomServers = listOf(
         "https://blossom.primal.net",
@@ -30,8 +38,11 @@ class SettingsRepository(private val appContext: Context) {
     fun isAlwaysUseKind1(): Boolean = prefs.getBoolean("always_kind_1", false)
     fun setAlwaysUseKind1(enabled: Boolean) = prefs.edit().putBoolean("always_kind_1", enabled).apply()
 
-    fun isOptimizeMediaEnabled(): Boolean = prefs.getBoolean("optimize_media", true)
-    fun setOptimizeMediaEnabled(enabled: Boolean) = prefs.edit().putBoolean("optimize_media", enabled).apply()
+    fun isOptimizeMediaEnabled(): Boolean = getCompressionLevel() != COMPRESSION_NONE
+    fun setOptimizeMediaEnabled(enabled: Boolean) = setCompressionLevel(if (enabled) COMPRESSION_MEDIUM else COMPRESSION_NONE)
+
+    fun getCompressionLevel(): Int = prefs.getInt("compression_level", COMPRESSION_MEDIUM)
+    fun setCompressionLevel(level: Int) = prefs.edit().putInt("compression_level", level).apply()
 
     fun isBlastrEnabled(): Boolean = prefs.getBoolean("blastr_enabled", false)
     fun setBlastrEnabled(enabled: Boolean) = prefs.edit().putBoolean("blastr_enabled", enabled).apply()
@@ -42,8 +53,8 @@ class SettingsRepository(private val appContext: Context) {
     fun getBlossomServers(): List<BlossomServer> {
         val jsonString = prefs.getString("blossom_servers_json", null)
         if (jsonString == null) {
-             // Defaults
-             return defaultServers
+             // Suggestions for new users only
+             return if (!isOnboarded()) onboardDefaults else defaultServers
         }
         
         val list = mutableListOf<BlossomServer>()
@@ -54,7 +65,7 @@ class SettingsRepository(private val appContext: Context) {
                 list.add(BlossomServer(obj.getString("url"), obj.getBoolean("enabled")))
             }
         } catch (e: Exception) {
-            return defaultServers
+             return if (!isOnboarded()) onboardDefaults else defaultServers
         }
         return list
     }

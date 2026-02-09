@@ -79,86 +79,10 @@ internal fun String.npubToHex(): String {
     }
 
     return try {
-        val decoded = Bech32.decode(this)
+        val decoded = com.ryans.nostrshare.NostrUtils.Bech32.decode(this)
         decoded.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
     } catch (e: Exception) {
         this 
-    }
-}
-
-/**
- * Minimal Bech32 decoder for npub strings.
- */
-private object Bech32 {
-    private const val CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-    private val GENERATOR = intArrayOf(0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3)
-
-    fun decode(bech32: String): ByteArray {
-        val lower = bech32.lowercase()
-        val pos = lower.lastIndexOf('1')
-        require(pos >= 1) { "Invalid bech32: no separator" }
-
-        val hrp = lower.substring(0, pos)
-        val data = lower.substring(pos + 1)
-        val values = data.map { CHARSET.indexOf(it) }
-        require(values.all { it >= 0 }) { "Invalid bech32: bad character" }
-
-        require(verifyChecksum(hrp, values)) { "Invalid bech32: bad checksum" }
-
-        val dataValues = values.dropLast(6)
-        return convertBits(dataValues, 5, 8, false)
-    }
-
-    private fun verifyChecksum(hrp: String, values: List<Int>): Boolean {
-        return polymod(hrpExpand(hrp) + values) == 1
-    }
-
-    private fun hrpExpand(hrp: String): List<Int> {
-        val result = mutableListOf<Int>()
-        for (c in hrp) {
-            result.add(c.code shr 5)
-        }
-        result.add(0)
-        for (c in hrp) {
-            result.add(c.code and 31)
-        }
-        return result
-    }
-
-    private fun polymod(values: List<Int>): Int {
-        var chk = 1
-        for (v in values) {
-            val top = chk shr 25
-            chk = ((chk and 0x1ffffff) shl 5) xor v
-            for (i in 0..4) {
-                if ((top shr i) and 1 == 1) {
-                    chk = chk xor GENERATOR[i]
-                }
-            }
-        }
-        return chk
-    }
-
-    private fun convertBits(data: List<Int>, fromBits: Int, toBits: Int, pad: Boolean): ByteArray {
-        var acc = 0
-        var bits = 0
-        val result = mutableListOf<Byte>()
-        val maxv = (1 shl toBits) - 1
-
-        for (value in data) {
-            acc = (acc shl fromBits) or value
-            bits += fromBits
-            while (bits >= toBits) {
-                bits -= toBits
-                result.add(((acc shr bits) and maxv).toByte())
-            }
-        }
-
-        if (pad && bits > 0) {
-            result.add(((acc shl (toBits - bits)) and maxv).toByte())
-        }
-
-        return result.toByteArray()
     }
 }
 
@@ -192,6 +116,7 @@ internal object Nip55Protocol {
 
     const val TYPE_GET_PUBLIC_KEY = "get_public_key"
     const val TYPE_SIGN_EVENT = "sign_event"
+    const val TYPE_SIGN_EVENTS = "sign_events"
     const val TYPE_NIP04_ENCRYPT = "nip04_encrypt"
     const val TYPE_NIP04_DECRYPT = "nip04_decrypt"
     const val TYPE_NIP44_ENCRYPT = "nip44_encrypt"
@@ -210,6 +135,7 @@ internal object Nip55Protocol {
     const val RESULT_ID = "id"
 
     const val RESULT_SIGNATURE = "signature"
+    const val RESULT_SIGNATURES = "signatures"
 
     fun createIntent(uriData: String = ""): Intent {
         return Intent(Intent.ACTION_VIEW, Uri.parse("$URI_SCHEME:$uriData")).apply {

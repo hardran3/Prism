@@ -265,6 +265,110 @@ class RelayManager(
         return@withContext serverList.toList()
     }
 
+    suspend fun fetchEvent(eventId: String, relays: List<String> = emptyList()): JSONObject? = withContext(Dispatchers.IO) {
+        val relayList = if (relays.isNotEmpty()) relays else bootstrapRelays
+        val latch = CountDownLatch(1)
+        var result: JSONObject? = null
+
+        for (url in relayList) {
+            val request = Request.Builder().url(url).build()
+            val listener = object : WebSocketListener() {
+                val subId = UUID.randomUUID().toString()
+                
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    val filter = JSONObject()
+                    filter.put("ids", JSONArray().put(eventId))
+                    filter.put("limit", 1)
+                    val req = JSONArray()
+                    req.put("REQ")
+                    req.put(subId)
+                    req.put(filter)
+                    webSocket.send(req.toString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val json = JSONArray(text)
+                        val type = json.optString(0)
+                        if (type == "EVENT" && json.optString(1) == subId) {
+                            result = json.getJSONObject(2)
+                            webSocket.close(1000, "Done")
+                            latch.countDown()
+                        } else if (type == "EOSE" && json.optString(1) == subId) {
+                           webSocket.close(1000, "EOSE")
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                     // Fail silently
+                }
+            }
+            client.newWebSocket(request, listener)
+        }
+        
+        try {
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) { }
+        
+        return@withContext result
+    }
+
+    suspend fun fetchAddress(kind: Int, pubkey: String, identifier: String, relays: List<String> = emptyList()): JSONObject? = withContext(Dispatchers.IO) {
+        val relayList = if (relays.isNotEmpty()) relays else bootstrapRelays
+        val latch = CountDownLatch(1)
+        var result: JSONObject? = null
+
+        for (url in relayList) {
+            val request = Request.Builder().url(url).build()
+            val listener = object : WebSocketListener() {
+                val subId = UUID.randomUUID().toString()
+                
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    val filter = JSONObject()
+                    filter.put("kinds", JSONArray().put(kind))
+                    filter.put("authors", JSONArray().put(pubkey))
+                    val dTag = JSONArray().put(identifier)
+                    filter.put("#d", dTag)
+                    filter.put("limit", 1)
+                    val req = JSONArray()
+                    req.put("REQ")
+                    req.put(subId)
+                    req.put(filter)
+                    webSocket.send(req.toString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val json = JSONArray(text)
+                        val type = json.optString(0)
+                        if (type == "EVENT" && json.optString(1) == subId) {
+                            result = json.getJSONObject(2)
+                            webSocket.close(1000, "Done")
+                            latch.countDown()
+                        } else if (type == "EOSE" && json.optString(1) == subId) {
+                           webSocket.close(1000, "EOSE")
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                }
+            }
+            client.newWebSocket(request, listener)
+        }
+        
+        try {
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) { }
+        
+        return@withContext result
+    }
+
     fun createBlossomServerListEventJson(pubkey: String, servers: List<String>): String {
         val event = JSONObject()
         event.put("kind", 10063)

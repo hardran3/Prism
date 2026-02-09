@@ -170,7 +170,6 @@ fun SettingsScreen(
 @Composable
 fun GeneralSettingsTab(repo: SettingsRepository) {
     var alwaysKind1 by remember { mutableStateOf(repo.isAlwaysUseKind1()) }
-    var optimizeMedia by remember { mutableStateOf(repo.isOptimizeMediaEnabled()) }
     var blastrEnabled by remember { mutableStateOf(repo.isBlastrEnabled()) }
     var hapticEnabled by remember { mutableStateOf(repo.isHapticEnabled()) }
     
@@ -206,25 +205,39 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
         
         HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
         
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Compress Images", style = MaterialTheme.typography.bodyLarge)
-                Text("Resize before uploading.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(
-                checked = optimizeMedia,
-                onCheckedChange = { 
-                    if (repo.isHapticEnabled()) {
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                    }
-                    optimizeMedia = it
-                    repo.setOptimizeMediaEnabled(it)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text("Image Compression", style = MaterialTheme.typography.bodyLarge)
+            Text("Balance between file size and visual quality.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            var compressionLevel by remember { mutableStateOf(repo.getCompressionLevel()) }
+            
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val levels = listOf(
+                    SettingsRepository.COMPRESSION_NONE to "None",
+                    SettingsRepository.COMPRESSION_MEDIUM to "Balanced",
+                    SettingsRepository.COMPRESSION_HIGH to "High"
+                )
+                
+                levels.forEach { (level, label) ->
+                    FilterChip(
+                        selected = compressionLevel == level,
+                        onClick = {
+                            if (repo.isHapticEnabled()) {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            }
+                            compressionLevel = level
+                            repo.setCompressionLevel(level)
+                        },
+                        label = { Text(label) },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
-            )
+            }
         }
         
         HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))

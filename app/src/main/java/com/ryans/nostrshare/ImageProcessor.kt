@@ -10,7 +10,7 @@ import java.io.FileOutputStream
 object ImageProcessor {
     data class ProcessResult(val uri: Uri, val mimeType: String)
 
-    fun processImage(context: Context, uri: Uri, mimeType: String?, compress: Boolean): ProcessResult? {
+    fun processImage(context: Context, uri: Uri, mimeType: String?, compressionLevel: Int): ProcessResult? {
         try {
             val cacheDir = context.cacheDir
             val normalizedMime = mimeType?.lowercase() ?: "image/jpeg"
@@ -18,12 +18,12 @@ object ImageProcessor {
             val isPng = normalizedMime.contains("png")
             
             // Determine output extension and format
-            val outExtension = if (!compress && isPng) ".png" else ".jpg"
+            val outExtension = if (compressionLevel == SettingsRepository.COMPRESSION_NONE && isPng) ".png" else ".jpg"
             val filename = "processed_${System.currentTimeMillis()}$outExtension"
             val file = File(cacheDir, filename)
 
-            // OPTION A: Surgical Strip (No Compression requested)
-            if (!compress) {
+            // OPTION A: Surgical Strip (No Compression level)
+            if (compressionLevel == SettingsRepository.COMPRESSION_NONE) {
                 if (isJpeg || isPng) {
                     val inputStream = context.contentResolver.openInputStream(uri) ?: return null
                     val outputStream = FileOutputStream(file)
@@ -40,11 +40,11 @@ object ImageProcessor {
                     if (success) {
                         return ProcessResult(Uri.fromFile(file), if (isPng) "image/png" else "image/jpeg")
                     }
-                    // If surgical failed, fall back to re-encode
+                    // If surgical failed, fall back to high quality re-encode below
                 }
             }
 
-            // OPTION B: Re-encode (Compress requested OR Surgical failed)
+            // OPTION B: Re-encode (Compression level > NONE OR Surgical failed)
             val inputStream = context.contentResolver.openInputStream(uri) ?: return null
             val bitmap = BitmapFactory.decodeStream(inputStream)
             inputStream.close()
@@ -53,17 +53,19 @@ object ImageProcessor {
             
             val outputStream = FileOutputStream(file)
             
-            if (compress) {
+            if (compressionLevel != SettingsRepository.COMPRESSION_NONE) {
                 // Resize and convert to JPEG
                 var processedBitmap = bitmap
-                val maxDim = 1024
+                val maxDim = if (compressionLevel == SettingsRepository.COMPRESSION_HIGH) 1024 else 1600
+                val quality = if (compressionLevel == SettingsRepository.COMPRESSION_HIGH) 60 else 85
+                
                 if (bitmap.width > maxDim || bitmap.height > maxDim) {
                     val ratio = Math.min(maxDim.toFloat() / bitmap.width, maxDim.toFloat() / bitmap.height)
                     val width = (bitmap.width * ratio).toInt()
                     val height = (bitmap.height * ratio).toInt()
                     processedBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true)
                 }
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
             } else {
                 // Fallback high quality re-encode (only if surgical fails)
                 if (isPng) {
@@ -76,7 +78,7 @@ object ImageProcessor {
             outputStream.flush()
             outputStream.close()
             
-            val outMime = if (!compress && isPng) "image/png" else "image/jpeg"
+            val outMime = if (compressionLevel == SettingsRepository.COMPRESSION_NONE && isPng) "image/png" else "image/jpeg"
             return ProcessResult(Uri.fromFile(file), outMime)
             
         } catch (e: Exception) {
