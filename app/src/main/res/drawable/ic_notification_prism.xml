@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- The Prism Triangle (White Stroke for system tinting) -->
+    <path
+        android:pathData="M54,10 L94,90 L14,90 Z"
+        android:strokeWidth="8"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/> 
+        
+</vector>

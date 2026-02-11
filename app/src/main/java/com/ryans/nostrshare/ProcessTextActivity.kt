@@ -15,6 +15,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.ryans.nostrshare.nip55.*
 import com.ryans.nostrshare.ui.theme.NostrShareTheme
+import com.ryans.nostrshare.ui.DraftsDialog
+import com.ryans.nostrshare.data.Draft
+import androidx.compose.ui.zIndex
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Person
@@ -50,6 +53,21 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.launch
 
 class ProcessTextActivity : ComponentActivity() {
 
@@ -111,11 +129,57 @@ class ProcessTextActivity : ComponentActivity() {
         }
     }
 
+    private var pendingScheduledTime: Long? = null
+    private val requestPermissionLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            pendingScheduledTime?.let { 
+                checkExactAlarmAndSchedule(it)
+            }
+        } else {
+            // Even if denied, we proceed with scheduling (inexact), but let's check exact alarm permission anyway?
+            // User just won't get the alert.
+            pendingScheduledTime?.let {
+                checkExactAlarmAndSchedule(it)
+            }
+            Toast.makeText(this, "Notifications disabled. You won't be alerted when the note is sent.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private var showExactAlarmDialog by mutableStateOf(false)
+
+    private val exactAlarmLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        // Check permission again
+        pendingScheduledTime?.let { time ->
+             checkExactAlarmAndSchedule(time)
+        }
+    }
+
+    private fun checkExactAlarmAndSchedule(time: Long) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            val alarmManager = getSystemService(android.app.AlarmManager::class.java)
+            if (alarmManager.canScheduleExactAlarms()) {
+                viewModel.prepareScheduling(time)
+                pendingScheduledTime = null
+            } else {
+                pendingScheduledTime = time
+                showExactAlarmDialog = true
+            }
+        } else {
+            viewModel.prepareScheduling(time)
+            pendingScheduledTime = null
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         
         viewModel.checkDraft() // Check for saved work
+        viewModel.verifyScheduledNotes(this) // Check scheduled notes and persistent notification
         
         // ... (Keep existing Intent handling logic) ...
          if (intent.action == Intent.ACTION_PROCESS_TEXT) {
@@ -155,7 +219,8 @@ class ProcessTextActivity : ComponentActivity() {
                         viewModel.updateQuote(subject)
                     }
                     
-                    viewModel.updateSource(entity)
+                    val cleanEntity = if (entity.startsWith("http")) UrlUtils.cleanUrl(entity) else entity
+                    viewModel.updateSource(cleanEntity)
                 } else {
                     viewModel.updateQuote(text)
                 }
@@ -186,6 +251,36 @@ class ProcessTextActivity : ComponentActivity() {
                         OnboardingScreen(viewModel)
                     } else {
                         ShareScreen(viewModel)
+                    }
+
+                    if (showExactAlarmDialog) {
+                         AlertDialog(
+                            onDismissRequest = { 
+                                showExactAlarmDialog = false 
+                                // On dismiss without action, maybe fall back to inexact?
+                                pendingScheduledTime?.let { viewModel.prepareScheduling(it); pendingScheduledTime = null }
+                            },
+                            title = { Text("Exact Timing Permission") },
+                            text = { 
+                                Text("To publish your note at the exact requested time, Prism needs permission to schedule exact alarms.\n\nWithout this, your note may be delayed by Android's battery optimizations.") 
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showExactAlarmDialog = false
+                                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                                    // Make sure to add package uri
+                                    intent.data = android.net.Uri.parse("package:$packageName")
+                                    exactAlarmLauncher.launch(intent)
+                                }) { Text("Open Settings") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = {
+                                    showExactAlarmDialog = false
+                                    // Fallback to inexact
+                                    pendingScheduledTime?.let { viewModel.prepareScheduling(it); pendingScheduledTime = null }
+                                }) { Text("Skip (Inexact)") }
+                            }
+                        )
                     }
                 }
             }
@@ -378,6 +473,7 @@ class ProcessTextActivity : ComponentActivity() {
     fun ShareScreen(vm: ProcessTextViewModel) {
         val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+        var showActionOptions by remember { mutableStateOf(false) }
         
         // Auto-save Draft
         LaunchedEffect(vm.quoteContent, vm.sourceUrl, vm.postKind, vm.mediaUri, vm.uploadedMediaUrl) {
@@ -387,12 +483,12 @@ class ProcessTextActivity : ComponentActivity() {
             }
         }
 
-        // Draft Prompt
-
-        
-        
         var showConfirmClear by remember { mutableStateOf(false) }
         var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
+        var showDraftsDialog by remember { mutableStateOf(false) }
+        var showDatePicker by remember { mutableStateOf(false) }
+        var showTimePicker by remember { mutableStateOf(false) }
+        var tempDateMillis by remember { mutableStateOf<Long?>(null) }
 
         // Auto-focus
         LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -501,14 +597,16 @@ class ProcessTextActivity : ComponentActivity() {
                         }
                     },
                     actions = {
-                        // Attach Media - Small
-                        IconButton(onClick = { 
+
+
+                        // Drafts - Small
+                        IconButton(onClick = {
                             if (vm.isHapticEnabled()) {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             }
-                            pickMediaLauncher.launch("*/*") 
+                            showDraftsDialog = true
                         }) {
-                            Icon(Icons.Default.AddPhotoAlternate, "Attach Media") 
+                             Icon(Icons.Default.Edit, "Manage Drafts")
                         }
 
                         // Settings - Small
@@ -570,122 +668,229 @@ class ProcessTextActivity : ComponentActivity() {
                         }
                     }
                 } else {
+                    val canPost = vm.quoteContent.isNotBlank() || vm.mediaItems.isNotEmpty() || vm.sourceUrl.isNotBlank()
+                    
                     BottomAppBar(
-                         actions = {
-                             // Clear & Close Button
-                             // Clear & Close Button (FAB Style)
-                             // Clear & Close Button (FAB Style)
-                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                  FloatingActionButton(
-                                     onClick = { 
-                                         if (vm.isHapticEnabled()) {
-                                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                         }
-                                         showConfirmClear = !showConfirmClear 
-                                     },
-                                     containerColor = MaterialTheme.colorScheme.errorContainer,
-                                     contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                                     modifier = Modifier.padding(start = 16.dp) 
-                                 ) {
-                                     // Icon changes based on state
-                                     if (showConfirmClear) {
-                                         Icon(Icons.Default.Close, "Cancel Delete")
-                                     } else {
-                                         Icon(Icons.Default.Delete, "Clear & Close")
-                                     }
-                                 }
-                                 
-                                 if (showConfirmClear) {
-                                     Spacer(modifier = Modifier.width(16.dp))
-                                     FloatingActionButton(
-                                         onClick = { 
-                                             if (vm.isHapticEnabled()) {
-                                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                             }
-                                             vm.clearContent()
-                                             finish()
-                                         },
-                                         containerColor = MaterialTheme.colorScheme.error,
-                                         contentColor = MaterialTheme.colorScheme.onError
-                                     ) {
-                                         Icon(Icons.Default.Check, "Confirm Delete")
-                                     }
-                                 }
-                             }
-
-                            if (vm.publishSuccess == false || vm.uploadStatus.startsWith("Error") || vm.uploadStatus.startsWith("Upload failed")) {
-                                Text(
-                                    text = if (vm.uploadStatus.isNotBlank()) vm.uploadStatus else "Failed. Retry?", 
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.padding(start = 16.dp)
-                                )
-                            }
-                        },
-                        floatingActionButton = {
-                            FloatingActionButton(
-                                onClick = {
-                                    if (vm.isHapticEnabled()) {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                    }
-                                    if (vm.pubkey == null) {
-                                        if (Nip55.isSignerAvailable(this@ProcessTextActivity)) {
-                                            getPublicKeyLauncher.launch(
-                                                GetPublicKeyContract.Input(
-                                                    permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(24242), Permission.signEvent(20), Permission.signEvent(22)) 
-                                                )
-                                            )
-                                        } else {
-                                            Toast.makeText(this@ProcessTextActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
+                        actions = {
+                            // Left-side: Clear & Close
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                FloatingActionButton(
+                                    onClick = {
+                                        if (vm.isHapticEnabled()) {
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                         }
+                                        showConfirmClear = !showConfirmClear
+                                    },
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.padding(start = 16.dp).size(48.dp)
+                                ) {
+                                    if (showConfirmClear) {
+                                        Icon(Icons.Default.Close, "Cancel Delete")
                                     } else {
-                                        vm.currentSigningPurpose = ProcessTextViewModel.SigningPurpose.POST
-                                        
-                                        // If uploading is still in progress, we should wait or error.
-                                        // If media is selected but not uploaded (and not currently uploading), start upload first?
-                                        // For MVP, assume flow is: Select Media -> Auto Upload -> Sign Post.
-                                        // If upload failed, user can retry by re-selecting or we add a retry button.
-                                        if (vm.postKind == ProcessTextViewModel.PostKind.MEDIA || vm.postKind == ProcessTextViewModel.PostKind.FILE_METADATA || vm.mediaItems.isNotEmpty()) {
-                                            val pendingItems = vm.mediaItems.filter { it.uploadedUrl == null }
-                                            if (pendingItems.isNotEmpty()) {
-                                                // Check if any items are ready to be uploaded but aren't yet
-                                                val readyToUpload = pendingItems.find { !it.isUploading && !it.isProcessing }
-                                                if (readyToUpload != null) {
-                                                     vm.initiateUploadAuth(this@ProcessTextActivity, readyToUpload)
-                                                     return@FloatingActionButton
-                                                }
-                                                
-                                                // If we have pending items but they are all already uploading/processing, just wait
-                                                Toast.makeText(this@ProcessTextActivity, "Please wait for media uploads to finish.", Toast.LENGTH_SHORT).show()
-                                                return@FloatingActionButton
-                                            }
-                                        }
-
-                                        if (vm.postKind == ProcessTextViewModel.PostKind.FILE_METADATA) {
-                                            val eventsJson = vm.prepareBulkFileMetadataEvents()
-                                            if (eventsJson.isEmpty()) {
-                                                Toast.makeText(this@ProcessTextActivity, "No uploaded media for metadata.", Toast.LENGTH_SHORT).show()
-                                                return@FloatingActionButton
-                                            }
-                                            signEventsLauncher.launch(
-                                                SignEventsContract.Input(
-                                                    eventsJson = eventsJson,
-                                                    currentUser = vm.pubkey!!
-                                                )
-                                            )
-                                        } else {
-                                            val eventJson = vm.prepareEventJson()
-                                            signEventLauncher.launch(
-                                                SignEventContract.Input(
-                                                    eventJson = eventJson,
-                                                    currentUser = vm.pubkey!!,
-                                                    id = System.currentTimeMillis().toString()
-                                                )
-                                            )
-                                        }
+                                        Icon(Icons.Default.Delete, "Clear & Close")
                                     }
                                 }
-                            ) {
-                                Icon(Icons.Filled.Send, "Post")
+
+                                if (showConfirmClear) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    FloatingActionButton(
+                                        onClick = {
+                                            if (vm.isHapticEnabled()) {
+                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            }
+                                            vm.clearContent()
+                                            finish()
+                                        },
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError,
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(Icons.Default.Check, "Confirm Delete")
+                                    }
+                                }
+                            }
+
+                            if (vm.publishSuccess == false || vm.uploadStatus.startsWith("Error")) {
+                                Text(
+                                    text = "Error",
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(start = 8.dp),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+                            // Right-side: Action Buttons
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // Add Media
+                                FloatingActionButton(
+                                    onClick = {
+                                        if (vm.isHapticEnabled()) {
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        }
+                                        pickMediaLauncher.launch("*/*")
+                                    },
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Icon(Icons.Default.AddPhotoAlternate, "Attach Media", modifier = Modifier.size(20.dp))
+                                }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                // Add User
+                                FloatingActionButton(
+                                    onClick = {
+                                        if (vm.isHapticEnabled()) {
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        }
+                                        vm.showUserSearchDialog = true
+                                    },
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Icon(Icons.Default.PersonAdd, "Add User", modifier = Modifier.size(20.dp))
+                                }
+
+                                Spacer(modifier = Modifier.width(16.dp)) // Double spacer
+
+                                // Expanding assembly
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // Close
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = showActionOptions,
+                                        enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
+                                        exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End)
+                                    ) {
+                                        FloatingActionButton(
+                                            onClick = { 
+                                                if (vm.isHapticEnabled()) {
+                                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                }
+                                                showActionOptions = false 
+                                            },
+                                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.size(48.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, "Close", modifier = Modifier.size(20.dp))
+                                        }
+                                    }
+
+                                    if (showActionOptions) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+
+                                    // Schedule
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = showActionOptions,
+                                        enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
+                                        exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End)
+                                    ) {
+                                        FloatingActionButton(
+                                            onClick = {
+                                                if (vm.isHapticEnabled()) {
+                                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                }
+                                                if (canPost) {
+                                                    showActionOptions = false
+                                                    showDatePicker = true
+                                                }
+                                            },
+                                            containerColor = if (canPost) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                            contentColor = if (canPost) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                                            modifier = Modifier.size(48.dp)
+                                        ) {
+                                            Icon(Icons.Default.Schedule, contentDescription = "Schedule", modifier = Modifier.size(20.dp))
+                                        }
+                                    }
+
+                                    if (showActionOptions) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+
+                                    // Draft
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = showActionOptions,
+                                        enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
+                                        exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End)
+                                    ) {
+                                        FloatingActionButton(
+                                            onClick = {
+                                                if (vm.isHapticEnabled()) {
+                                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                }
+                                                if (canPost) {
+                                                    showActionOptions = false
+                                                    vm.saveManualDraft()
+                                                    Toast.makeText(this@ProcessTextActivity, "Draft saved!", Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                            containerColor = if (canPost) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                            contentColor = if (canPost) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                                            modifier = Modifier.size(48.dp)
+                                        ) {
+                                            Icon(Icons.Default.Save, contentDescription = "Save Draft", modifier = Modifier.size(20.dp))
+                                        }
+                                    }
+
+                                    if (showActionOptions) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+
+                                    // Publish
+                                    FloatingActionButton(
+                                        onClick = {
+                                            if (vm.isHapticEnabled()) {
+                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            }
+                                            if (!showActionOptions) {
+                                                showActionOptions = true
+                                            } else {
+                                                if (canPost) {
+                                                    showActionOptions = false
+                                                    if (vm.pubkey == null) {
+                                                        if (Nip55.isSignerAvailable(this@ProcessTextActivity)) {
+                                                            getPublicKeyLauncher.launch(
+                                                                GetPublicKeyContract.Input(
+                                                                    permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(24242), Permission.signEvent(20), Permission.signEvent(22))
+                                                                )
+                                                            )
+                                                        } else {
+                                                            Toast.makeText(this@ProcessTextActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
+                                                        }
+                                                    } else {
+                                                        vm.currentSigningPurpose = ProcessTextViewModel.SigningPurpose.POST
+                                                        if (vm.postKind == ProcessTextViewModel.PostKind.MEDIA || vm.mediaItems.isNotEmpty()) {
+                                                            val pendingItems = vm.mediaItems.filter { it.uploadedUrl == null }
+                                                            if (pendingItems.isNotEmpty()) {
+                                                                val readyToUpload = pendingItems.find { !it.isUploading && !it.isProcessing }
+                                                                if (readyToUpload != null) {
+                                                                    vm.initiateUploadAuth(this@ProcessTextActivity, readyToUpload)
+                                                                } else {
+                                                                    Toast.makeText(this@ProcessTextActivity, "Please wait for uploads to complete.", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                                return@FloatingActionButton
+                                                            }
+                                                        }
+                                                        vm.requestSignature(vm.prepareEventJson())
+                                                    }
+                                                } else {
+                                                    showActionOptions = false // Just collapse if empty
+                                                }
+                                            }
+                                        },
+                                        containerColor = if (canPost) Color(0xFF81C784) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        contentColor = if (canPost) Color(0xFF1B5E20) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                                        modifier = Modifier.padding(end = 16.dp).size(48.dp)
+                                    ) {
+                                        Icon(Icons.Default.Send, contentDescription = "Publish", modifier = Modifier.size(20.dp))
+                                    }
+                                }
                             }
                         }
                     )
@@ -708,7 +913,6 @@ class ProcessTextActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(innerPadding)
                     .consumeWindowInsets(innerPadding)
-                    //.imePadding() // Removed as Scaffold handles it
                     .padding(16.dp)
                     .fillMaxSize()
             ) {
@@ -724,22 +928,72 @@ class ProcessTextActivity : ComponentActivity() {
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                // Main Text Input
-                OutlinedTextField(
-                    value = vm.quoteContent,
-                    onValueChange = { vm.updateQuote(it) },
-                    label = { 
-                        Text(when (vm.postKind) {
+                // User Tagging Logic
+                val cacheSize = vm.usernameCache.size // Read size to trigger recomposition when new users are resolved
+                
+                LaunchedEffect(vm.quoteContent) {
+                    val entityPattern = java.util.regex.Pattern.compile("(nostr:)?(npub1|nprofile1)[a-z0-9]+", java.util.regex.Pattern.CASE_INSENSITIVE)
+                    val matcher = entityPattern.matcher(vm.quoteContent)
+                    while (matcher.find()) {
+                        val match = matcher.group()
+                        val bech32 = if (match.startsWith("nostr:")) match.substring(6) else match
+                        vm.resolveUsername(bech32)
+                    }
+                }
+
+                if (vm.showUserSearchDialog) {
+                    UserSearchDialog(
+                        vm = vm,
+                        onDismiss = { vm.showUserSearchDialog = false },
+                        onUserSelected = { pubkey ->
+                            val nprofile = NostrUtils.pubkeyToNprofile(pubkey)
+                            val tag = "nostr:$nprofile"
+                            vm.updateQuote(vm.quoteContent + (if (vm.quoteContent.isEmpty() || vm.quoteContent.endsWith(" ")) "" else " ") + tag)
+                            vm.showUserSearchDialog = false
+                            vm.userSearchQuery = ""
+                            vm.userSearchResults.clear()
+                        }
+                    )
+                }
+
+                if (showDraftsDialog) {
+                    DraftsDialog(
+                        vm = vm,
+                        onDismiss = { showDraftsDialog = false }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = when (vm.postKind) {
                             ProcessTextViewModel.PostKind.HIGHLIGHT -> "Highlighted Text"
                             ProcessTextViewModel.PostKind.NOTE -> "What's on your mind?"
                             else -> "Description"
-                        })
-                    },
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+
+                }
+
+                // Main Text Input
+                val highlightColor = MaterialTheme.colorScheme.primary
+                OutlinedTextField(
+                    value = vm.quoteContent,
+                    onValueChange = { vm.updateQuote(it) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
                         .focusRequester(focusRequester), // Focus request
-                    textStyle = MaterialTheme.typography.bodyLarge
+                    textStyle = MaterialTheme.typography.bodyLarge,
+                    visualTransformation = remember(cacheSize, highlightColor) { 
+                        NpubVisualTransformation(vm.usernameCache, highlightColor) 
+                    }
                 )
                 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -749,7 +1003,7 @@ class ProcessTextActivity : ComponentActivity() {
                 if (vm.postKind != ProcessTextViewModel.PostKind.NOTE) {
                     OutlinedTextField(
                         value = vm.sourceUrl,
-                        onValueChange = { vm.sourceUrl = it },
+                        onValueChange = { vm.updateSource(it) },
                         label = { Text("Source URL") },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -835,6 +1089,85 @@ class ProcessTextActivity : ComponentActivity() {
                     SharingDialog(
                         vm = vm,
                         onDismiss = { vm.showSharingDialog = false }
+                    )
+                }
+
+                if (showDatePicker) {
+                    val datePickerState = rememberDatePickerState(
+                        initialSelectedDateMillis = System.currentTimeMillis()
+                    )
+                    DatePickerDialog(
+                        onDismissRequest = { showDatePicker = false },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                showDatePicker = false
+                                showTimePicker = true
+                                tempDateMillis = datePickerState.selectedDateMillis
+                            }) { Text("Next") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showDatePicker = false }) { Text("Cancel") }
+                        }
+                    ) {
+                        DatePicker(state = datePickerState)
+                    }
+                }
+
+                if (showTimePicker) {
+                    val timePickerState = rememberTimePickerState(
+                        initialHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
+                        initialMinute = java.util.Calendar.getInstance().get(java.util.Calendar.MINUTE)
+                    )
+                    AlertDialog(
+                        onDismissRequest = { showTimePicker = false },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val selectedDate = tempDateMillis ?: System.currentTimeMillis()
+                                
+                                // DatePicker gives midnight UTC. We need to extract Y/M/D from UTC and set in local calendar.
+                                val utcCalendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+                                utcCalendar.timeInMillis = selectedDate
+                                
+                                val calendar = java.util.Calendar.getInstance()
+                                calendar.set(java.util.Calendar.YEAR, utcCalendar.get(java.util.Calendar.YEAR))
+                                calendar.set(java.util.Calendar.MONTH, utcCalendar.get(java.util.Calendar.MONTH))
+                                calendar.set(java.util.Calendar.DAY_OF_MONTH, utcCalendar.get(java.util.Calendar.DAY_OF_MONTH))
+                                calendar.set(java.util.Calendar.HOUR_OF_DAY, timePickerState.hour)
+                                calendar.set(java.util.Calendar.MINUTE, timePickerState.minute)
+                                calendar.set(java.util.Calendar.SECOND, 0)
+                                calendar.set(java.util.Calendar.MILLISECOND, 0)
+                                
+                                val scheduledTime = calendar.timeInMillis
+                                if (scheduledTime <= System.currentTimeMillis()) {
+                                     Toast.makeText(this@ProcessTextActivity, "Please pick a future time.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    showTimePicker = false
+                                    
+                                    // Handle Notification Permission (Android 13+)
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                        val permission = android.Manifest.permission.POST_NOTIFICATIONS
+                                        when {
+                                            androidx.core.content.ContextCompat.checkSelfPermission(this@ProcessTextActivity, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED -> {
+                                                checkExactAlarmAndSchedule(scheduledTime)
+                                            }
+                                            else -> {
+                                                pendingScheduledTime = scheduledTime
+                                                requestPermissionLauncher.launch(permission)
+                                            }
+                                        }
+                                    } else {
+                                        checkExactAlarmAndSchedule(scheduledTime)
+                                    }
+                                }
+                            }) { Text("Schedule") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showTimePicker = false }) { Text("Cancel") }
+                        },
+                        title = { Text("Select Time") },
+                        text = {
+                            TimePicker(state = timePickerState)
+                        }
                     )
                 }
             }
@@ -1404,5 +1737,170 @@ fun SharingDialog(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun UserSearchDialog(
+    vm: ProcessTextViewModel,
+    onDismiss: () -> Unit,
+    onUserSelected: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add User") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = vm.userSearchQuery,
+                    onValueChange = { vm.performUserSearch(it) },
+                    label = { Text("Search by name or npub") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                if (vm.isSearchingUsers) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                
+                androidx.compose.foundation.lazy.LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp)
+                ) {
+                    items(vm.userSearchResults.size) { index ->
+                        val (pubkey, profile) = vm.userSearchResults[index]
+                        
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .clickable { onUserSelected(pubkey) },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (profile.pictureUrl != null) {
+                                coil.compose.AsyncImage(
+                                    model = profile.pictureUrl,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp).clip(CircleShape),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                )
+                            } else {
+                                Icon(Icons.Default.Person, null, modifier = Modifier.size(40.dp))
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                val npub = try { NostrUtils.pubkeyToNpub(pubkey) } catch (_: Exception) { pubkey.take(16) + "..." }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(profile.name ?: pubkey.take(8), fontWeight = FontWeight.Bold)
+                                    if (vm.followedPubkeys.contains(pubkey)) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.Check, 
+                                            contentDescription = "Following",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                Text(npub, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+class NpubVisualTransformation(
+    private val usernameCache: Map<String, UserProfile>,
+    private val highlightColor: Color
+) : VisualTransformation {
+    override fun filter(text: AnnotatedString): androidx.compose.ui.text.input.TransformedText {
+        val originalText = text.text
+        val builder = AnnotatedString.Builder()
+        
+        val entities = mutableListOf<Triple<Int, Int, String>>() // Start, End, Label
+        
+        // Find npubs/nprofiles in the text
+        val entityPattern = java.util.regex.Pattern.compile("(nostr:)?(npub1|nprofile1)[a-z0-9]+", java.util.regex.Pattern.CASE_INSENSITIVE)
+        val matcher = entityPattern.matcher(originalText)
+        
+        var lastEnd = 0
+        while (matcher.find()) {
+            val start = matcher.start()
+            val end = matcher.end()
+            val match = matcher.group()
+            
+            builder.append(originalText.substring(lastEnd, start))
+            
+            val bech32 = if (match.startsWith("nostr:")) match.substring(6) else match
+            val entity = try { NostrUtils.findNostrEntity(bech32) } catch (_: Exception) { null }
+            val pubkey = entity?.id
+            val username = pubkey?.let { usernameCache[it]?.name }
+            
+            val label = if (username != null) "@$username" else match
+            val startOffset = builder.length
+            builder.withStyle(SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) {
+                append(label)
+            }
+            entities.add(Triple(start, end, label))
+            lastEnd = end
+        }
+        builder.append(originalText.substring(lastEnd))
+        
+        val transformedText = builder.toAnnotatedString()
+        
+        val offsetMapping = object : OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int {
+                var currentOriginal = 0
+                var currentTransformed = 0
+                
+                for (entity in entities) {
+                    val (start, end, label) = entity
+                    if (offset <= start) {
+                        return currentTransformed + (offset - currentOriginal)
+                    }
+                    if (offset < end) {
+                        // Inside the npub, map to start of label
+                        return currentTransformed + (start - currentOriginal)
+                    }
+                    // At the end or past the npub, map to end of label
+                    currentTransformed += (start - currentOriginal) + label.length
+                    currentOriginal = end
+                }
+                return currentTransformed + (offset - currentOriginal)
+            }
+
+            override fun transformedToOriginal(offset: Int): Int {
+                var currentOriginal = 0
+                var currentTransformed = 0
+                
+                for (entity in entities) {
+                    val (start, end, label) = entity
+                    val nextTransformedStart = currentTransformed + (start - currentOriginal)
+                    if (offset <= nextTransformedStart) {
+                        return currentOriginal + (offset - currentTransformed)
+                    }
+                    val nextTransformedEnd = nextTransformedStart + label.length
+                    if (offset < nextTransformedEnd) {
+                        // Clicked inside the label, jump to start
+                        return start 
+                    }
+                    // Past the label
+                    currentTransformed = nextTransformedEnd
+                    currentOriginal = end
+                }
+                return currentOriginal + (offset - currentTransformed)
+            }
+        }
+        
+        return androidx.compose.ui.text.input.TransformedText(transformedText, offsetMapping)
     }
 }

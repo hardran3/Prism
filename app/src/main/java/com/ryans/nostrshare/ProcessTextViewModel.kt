@@ -19,6 +19,8 @@ import android.net.Uri
 import java.io.File
 import org.json.JSONObject
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import com.ryans.nostrshare.data.Draft
 
 enum class OnboardingStep {
     WELCOME,
@@ -58,12 +60,22 @@ class ProcessTextViewModel : ViewModel() {
         }
     }
 
+    // User Profile Cache (pubkey -> profile)
+    var usernameCache = mutableStateMapOf<String, UserProfile>()
+    
+    // Follow List for prioritization
+    var followedPubkeys by mutableStateOf<Set<String>>(emptySet())
+
     private val prefs by lazy { 
         NostrShareApp.getInstance().getSharedPreferences("nostr_share_prefs", Context.MODE_PRIVATE) 
     }
     val settingsRepository by lazy { SettingsRepository(NostrShareApp.getInstance()) }
     private val relayManager by lazy { RelayManager(NostrShareApp.getInstance().client, settingsRepository) }
-    
+    private val draftDao by lazy { NostrShareApp.getInstance().database.draftDao() }
+
+    val drafts = draftDao.getAllDrafts()
+    val allScheduled = draftDao.getAllScheduled()
+    val scheduledHistory = draftDao.getScheduledHistory()
     var isUploading by mutableStateOf(false)
     var isDeleting by mutableStateOf(false)
     var uploadStatus by mutableStateOf("")
@@ -106,6 +118,12 @@ class ProcessTextViewModel : ViewModel() {
         if (!isOnboarded) {
             currentOnboardingStep = OnboardingStep.WELCOME
         }
+
+        // Load caches
+        followedPubkeys = settingsRepository.getFollowedPubkeys()
+        settingsRepository.getUsernameCache().forEach { (pk, profile) ->
+            usernameCache[pk] = profile
+        }
     }
 
     fun isHapticEnabled(): Boolean = settingsRepository.isHapticEnabled()
@@ -142,6 +160,24 @@ class ProcessTextViewModel : ViewModel() {
                 
                 // Also Sync Blossom Servers
                 syncBlossomServers()
+                
+                // Fetch home relays first to get a better contact list
+                val userRelays = relayManager.fetchRelayList(pk)
+                
+                // And fetch follows using home relays if found
+                val follows = relayManager.fetchContactList(pk, userRelays)
+                followedPubkeys = follows
+                settingsRepository.setFollowedPubkeys(follows)
+                
+                // Pre-cache profiles for followers (Kind 0)
+                if (follows.isNotEmpty()) {
+                    val followsList = follows.toList()
+                    relayManager.fetchUserProfiles(followsList) { p, profile ->
+                        usernameCache[p] = profile
+                    }
+                    // Persist the full updated cache at the end
+                    settingsRepository.setUsernameCache(usernameCache.toMap())
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -200,28 +236,48 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun updateQuote(newQuote: String) {
-        quoteContent = newQuote
+        val cleanedQuote = UrlUtils.cleanText(newQuote)
+        quoteContent = cleanedQuote
+
+        // Auto-enrich if empty source and we found a nostr link
+        if (sourceUrl.isBlank() && PostKind.HIGHLIGHT == postKind) {
+             val entity = NostrUtils.findNostrEntity(cleanedQuote)
+             if (entity != null && entity.type != "npub") {
+                 updateSource(entity.bech32)
+             }
+        }
     }
 
     fun updateSource(newSource: String) {
+        val cleanedSource = if (newSource.startsWith("http")) UrlUtils.cleanUrl(newSource) else newSource
         val oldSource = sourceUrl
-        sourceUrl = newSource
+        sourceUrl = cleanedSource
         
         // Ensure URL is visible in text body if in NOTE mode
-        if (postKind == PostKind.NOTE && newSource.isNotBlank() && !quoteContent.contains(newSource)) {
+        if (postKind == PostKind.NOTE && cleanedSource.isNotBlank() && !quoteContent.contains(cleanedSource)) {
              val prefix = if (quoteContent.isNotBlank()) "\n\n" else ""
-             quoteContent += "$prefix$newSource"
+             quoteContent += "$prefix$cleanedSource"
         }
 
         // Auto-extract Nostr Highlights
-        if (newSource.isNotBlank() && newSource != oldSource) {
-            val entity = NostrUtils.findNostrEntity(newSource)
-            if (entity != null && (entity.type == "nevent" || entity.type == "note" || entity.type == "naddr")) {
+        if (cleanedSource.isNotBlank() && cleanedSource != oldSource) {
+            val entity = NostrUtils.findNostrEntity(cleanedSource)
+            if (entity != null && (entity.type == "nevent" || entity.type == "note" || entity.type == "naddr" || entity.type == "nprofile")) {
                 viewModelScope.launch {
                     try {
                         // Switch to Highlight mode automatically
                         if (postKind != PostKind.HIGHLIGHT) {
                              setKind(PostKind.HIGHLIGHT)
+                        }
+
+                        if (entity.type == "nprofile") {
+                             // Just resolve username for nprofile
+                            val profile = relayManager.fetchUserProfile(entity.id)
+                            if (profile != null) {
+                                userProfile = profile
+                                usernameCache[entity.id] = profile
+                            }
+                            return@launch
                         }
 
                         val event = if (entity.type == "naddr") {
@@ -304,11 +360,103 @@ class ProcessTextViewModel : ViewModel() {
     var availableKinds by mutableStateOf(listOf(PostKind.NOTE, PostKind.HIGHLIGHT))
     
     // Signing Flow
-    enum class SigningPurpose { POST, UPLOAD_AUTH, DELETE_AUTH, BATCH_UPLOAD_AUTH }
+    enum class SigningPurpose {
+        POST,
+        UPLOAD_AUTH,
+        DELETE_AUTH,
+        BATCH_UPLOAD_AUTH,
+        SERVER_LIST,
+        SCHEDULE
+    }
     var currentSigningPurpose = SigningPurpose.POST
+    var currentScheduleTime: Long? = null
+
+    fun prepareScheduling(timestamp: Long) {
+        currentScheduleTime = timestamp
+        currentSigningPurpose = SigningPurpose.SCHEDULE
+        
+        // Generate event JSON with the FUTURE timestamp
+        val eventJson = prepareEventJson(createdAt = timestamp / 1000)
+        _eventToSign.value = eventJson
+    }
+
+    fun onScheduledEventSigned(signedJson: String) {
+        val timestamp = currentScheduleTime ?: return
+        currentScheduleTime = null
+        
+        viewModelScope.launch {
+            val mediaJson = serializeMediaItems(mediaItems)
+            val draft = Draft(
+                content = quoteContent,
+                sourceUrl = sourceUrl,
+                kind = postKind.kind,
+                mediaJson = mediaJson,
+                mediaTitle = mediaTitle,
+                pubkey = pubkey, // Save pubkey for scheduling
+                isScheduled = true,
+                scheduledAt = timestamp,
+                signedJson = signedJson,
+                isAutoSave = false
+            )
+            val id = draftDao.insertDraft(draft)
+            com.ryans.nostrshare.utils.SchedulerUtils.enqueueScheduledWork(
+                com.ryans.nostrshare.NostrShareApp.getInstance(),
+                draft.copy(id = id.toInt())
+            )
+            
+            // Clear editor after scheduling
+            clearContent()
+        }
+    }
+
+
+    fun cancelScheduledNote(draft: Draft) {
+        viewModelScope.launch {
+            draftDao.deleteDraft(draft)
+            
+            val context = com.ryans.nostrshare.NostrShareApp.getInstance()
+            val alarmManager = context.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+            
+            val intent = android.content.Intent(context, com.ryans.nostrshare.receivers.ScheduleReceiver::class.java).apply {
+                action = com.ryans.nostrshare.receivers.ScheduleReceiver.ACTION_PUBLISH_SCHEDULED
+                putExtra(com.ryans.nostrshare.receivers.ScheduleReceiver.EXTRA_DRAFT_ID, draft.id)
+            }
+            
+            val pendingIntent = android.app.PendingIntent.getBroadcast(
+                context,
+                draft.id,
+                intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_NO_CREATE
+            )
+            
+            if (pendingIntent != null) {
+                alarmManager.cancel(pendingIntent)
+                pendingIntent.cancel()
+            }
+            
+            // Update notification
+            com.ryans.nostrshare.utils.NotificationHelper.updateScheduledNotification(context)
+        }
+    }
+
+    fun verifyScheduledNotes(context: Context) {
+        com.ryans.nostrshare.utils.SchedulerUtils.verifyAllScheduledNotes(context)
+    }
+
+    fun clearScheduledHistory() {
+        viewModelScope.launch {
+            draftDao.deleteCompletedScheduled()
+        }
+    }
     var pendingAuthServerUrl: String? = null
     var pendingAuthItemId: String? = null // To track which item we are authenticating for
 
+    // User Search State
+    var userSearchQuery by mutableStateOf("")
+    var userSearchResults = mutableStateListOf<Pair<String, UserProfile>>()
+    var isSearchingUsers by mutableStateOf(false)
+    var showUserSearchDialog by mutableStateOf(false)
+    
     fun onMediaSelected(context: Context, uris: List<android.net.Uri>) {
         uris.forEach { uri ->
             val mimeType = context.contentResolver.getType(uri) ?: "image/*"
@@ -569,6 +717,10 @@ class ProcessTextViewModel : ViewModel() {
     private val _eventToSign = MutableStateFlow<String?>(null)
     val eventToSign: StateFlow<String?> = _eventToSign.asStateFlow()
     
+    fun requestSignature(json: String) {
+        _eventToSign.value = json
+    }
+    
     fun onEventSigned(signedEventJson: String) {
         val itemId = pendingAuthItemId
         val item = mediaItems.find { it.id == itemId }
@@ -581,9 +733,9 @@ class ProcessTextViewModel : ViewModel() {
             SigningPurpose.DELETE_AUTH -> {
                 if (item != null) finalizeDelete(item, signedEventJson)
             }
-            SigningPurpose.BATCH_UPLOAD_AUTH -> {
-                // Should use onBatchEventsSigned instead
-            }
+            SigningPurpose.SERVER_LIST -> finalizeBlossomServerListPublish(signedEventJson)
+            SigningPurpose.SCHEDULE -> onScheduledEventSigned(signedEventJson)
+            SigningPurpose.BATCH_UPLOAD_AUTH -> { }
         }
         _eventToSign.value = null // Reset
         pendingAuthItemId = null
@@ -763,86 +915,9 @@ class ProcessTextViewModel : ViewModel() {
 
     // Draft State
     var showDraftPrompt by mutableStateOf(false)
+    var currentDraftId: Int? = null
+    var showDatePicker by mutableStateOf(false)
     var isDraftMonitoringActive by mutableStateOf(false)
-    private var pendingDraft: Draft? = null
-
-    data class Draft(
-        val content: String,
-        val source: String,
-        val kind: PostKind,
-        val mediaUri: String?,
-        val mediaMime: String?,
-        val uploadedUrl: String?,
-        val uploadedHash: String?,
-        val uploadedSize: Long?
-    )
-
-    fun checkDraft() {
-        // Load draft from prefs
-        val content = prefs.getString("draft_content", "") ?: ""
-        val source = prefs.getString("draft_source", "") ?: ""
-        val kindStr = prefs.getString("draft_kind", "NOTE") ?: "NOTE"
-        val mediaUriStr = prefs.getString("draft_media_uri", null)
-        val uploadedUrl = prefs.getString("draft_uploaded_url", null)
-        
-        // If we have substantial content, prompt
-        if (content.isNotBlank() || source.isNotBlank() || mediaUriStr != null || uploadedUrl != null) {
-             val kind = try { PostKind.valueOf(kindStr) } catch(_: Exception) { PostKind.NOTE }
-             
-             pendingDraft = Draft(
-                 content = content,
-                 source = source,
-                 kind = kind,
-                 mediaUri = mediaUriStr,
-                 mediaMime = prefs.getString("draft_media_mime", null),
-                 uploadedUrl = uploadedUrl,
-                 uploadedHash = prefs.getString("draft_uploaded_hash", null),
-                 uploadedSize = if (prefs.contains("draft_uploaded_size")) prefs.getLong("draft_uploaded_size", 0L) else null
-             )
-             showDraftPrompt = true
-        } else {
-             // No draft, enable monitoring immediately
-             isDraftMonitoringActive = true
-        }
-    }
-
-    fun applyDraft() {
-        pendingDraft?.let { draft ->
-            quoteContent = draft.content
-            sourceUrl = draft.source
-            postKind = draft.kind // Direct assignment to avoid side effects
-            
-            if (draft.mediaUri != null) {
-                mediaUri = android.net.Uri.parse(draft.mediaUri)
-                mediaMimeType = draft.mediaMime
-            }
-            if (draft.uploadedUrl != null) {
-                uploadedMediaUrl = draft.uploadedUrl
-                uploadedMediaHash = draft.uploadedHash
-                uploadedMediaSize = draft.uploadedSize
-            }
-        }
-        pendingDraft = null
-        showDraftPrompt = false
-        isDraftMonitoringActive = true
-    }
-    
-    fun discardDraft() {
-        prefs.edit()
-            .remove("draft_content")
-            .remove("draft_source")
-            .remove("draft_kind")
-            .remove("draft_media_uri")
-            .remove("draft_media_mime")
-            .remove("draft_uploaded_url")
-            .remove("draft_uploaded_hash")
-            .remove("draft_uploaded_size")
-            .apply()
-            
-        pendingDraft = null
-        showDraftPrompt = false
-        isDraftMonitoringActive = true
-    }
 
     fun clearContent() {
         quoteContent = ""
@@ -853,28 +928,190 @@ class ProcessTextViewModel : ViewModel() {
         uploadedMediaHash = null
         uploadedMediaSize = null
         postKind = PostKind.NOTE
-        discardDraft()
+        mediaItems.clear()
+        mediaTitle = ""
+        
+        val draftIdToDelete = currentDraftId
+        currentDraftId = null
+        
+        viewModelScope.launch {
+            draftDao.deleteAutoSaveDraft()
+            if (draftIdToDelete != null) {
+                draftDao.deleteById(draftIdToDelete)
+            }
+        }
     }
-
     fun saveDraft() {
         if (!isDraftMonitoringActive) return
         
         // Don't save if empty
-        if (quoteContent.isBlank() && sourceUrl.isBlank() && mediaUri == null) {
-             discardDraft()
+        if (quoteContent.isBlank() && sourceUrl.isBlank() && mediaItems.isEmpty()) {
+             viewModelScope.launch { draftDao.deleteAutoSaveDraft() }
              return
         }
 
-        prefs.edit()
-            .putString("draft_content", quoteContent)
-            .putString("draft_source", sourceUrl)
-            .putString("draft_kind", postKind.name)
-            .putString("draft_media_uri", mediaUri?.toString())
-            .putString("draft_media_mime", mediaMimeType)
-            .putString("draft_uploaded_url", uploadedMediaUrl)
-            .putString("draft_uploaded_hash", uploadedMediaHash)
-            .putLong("draft_uploaded_size", uploadedMediaSize ?: 0L)
-            .apply()
+        viewModelScope.launch {
+            val mediaJson = serializeMediaItems(mediaItems)
+            val highlightRelaysJson = if (highlightRelays.isNotEmpty()) {
+                org.json.JSONArray(highlightRelays).toString()
+            } else {
+                null
+            }
+            val draft = Draft(
+                content = quoteContent,
+                sourceUrl = sourceUrl,
+                kind = postKind.kind,
+                mediaJson = mediaJson,
+                mediaTitle = mediaTitle,
+                highlightEventId = highlightEventId,
+                highlightAuthor = highlightAuthor,
+                highlightKind = highlightKind,
+                highlightIdentifier = highlightIdentifier,
+                highlightRelaysJson = highlightRelaysJson,
+                isAutoSave = true
+            )
+            // Use a specific ID if we want to update the SAME auto-save slot
+            // Actually insertDraft with REPLACE is fine if we manage the ID or just delete old one
+            draftDao.deleteAutoSaveDraft()
+            draftDao.insertDraft(draft)
+        }
+    }
+
+    fun saveManualDraft() {
+        viewModelScope.launch {
+            val mediaJson = serializeMediaItems(mediaItems)
+            val highlightRelaysJson = if (highlightRelays.isNotEmpty()) {
+                org.json.JSONArray(highlightRelays).toString()
+            } else {
+                null
+            }
+            val draft = Draft(
+                id = currentDraftId ?: 0,
+                content = quoteContent,
+                sourceUrl = sourceUrl,
+                kind = postKind.kind,
+                mediaJson = mediaJson,
+                mediaTitle = mediaTitle,
+                highlightEventId = highlightEventId,
+                highlightAuthor = highlightAuthor,
+                highlightKind = highlightKind,
+                highlightIdentifier = highlightIdentifier,
+                highlightRelaysJson = highlightRelaysJson,
+                isAutoSave = false
+            )
+            val newId = draftDao.insertDraft(draft)
+            if (currentDraftId == null) {
+                currentDraftId = newId.toInt()
+            }
+        }
+    }
+
+    fun discardDraft() {
+        showDraftPrompt = false
+        val draftIdToDelete = currentDraftId
+        currentDraftId = null
+        viewModelScope.launch {
+            draftDao.deleteAutoSaveDraft()
+            if (draftIdToDelete != null) {
+                draftDao.deleteById(draftIdToDelete)
+            }
+        }
+    }
+
+    fun deleteDraft(id: Int) {
+        viewModelScope.launch {
+            draftDao.deleteById(id)
+        }
+    }
+
+    fun checkDraft() {
+        viewModelScope.launch {
+            val autoDraft = draftDao.getAutoSaveDraft()
+            if (autoDraft != null) {
+                // Determine if we should show prompt
+                // Only if CURRENT content is empty
+                if (quoteContent.isBlank() && sourceUrl.isBlank() && mediaItems.isEmpty()) {
+                     showDraftPrompt = true
+                }
+            }
+        }
+    }
+
+    fun applyDraft() {
+        viewModelScope.launch {
+            val autoDraft = draftDao.getAutoSaveDraft()
+            autoDraft?.let { loadDraft(it) }
+            showDraftPrompt = false
+        }
+    }
+
+    fun loadDraft(draft: Draft) {
+        quoteContent = draft.content
+        sourceUrl = draft.sourceUrl
+        mediaTitle = draft.mediaTitle
+        currentDraftId = draft.id
+        
+        highlightEventId = draft.highlightEventId
+        highlightAuthor = draft.highlightAuthor
+        highlightKind = draft.highlightKind
+        highlightIdentifier = draft.highlightIdentifier
+        try {
+            draft.highlightRelaysJson?.let { jsonString ->
+                if (jsonString.isNotEmpty()) {
+                    val jsonArray = org.json.JSONArray(jsonString)
+                    highlightRelays.clear()
+                    for (i in 0 until jsonArray.length()) {
+                        highlightRelays.add(jsonArray.getString(i))
+                    }
+                } else {
+                    highlightRelays.clear()
+                }
+            } ?: highlightRelays.clear()
+        } catch (e: Exception) {
+            // Log the error for debugging, but don't crash the app
+            android.util.Log.e("ProcessTextViewModel", "Error parsing highlightRelaysJson: ${e.message}")
+            highlightRelays.clear()
+        }
+        
+        // Use PostKind values for restoration to avoid being limited by current session's availableKinds
+        postKind = PostKind.values().find { it.kind == draft.kind } ?: PostKind.NOTE
+        
+        // Deserialize media
+        deserializeMediaItems(draft.mediaJson)
+    }
+
+    private fun serializeMediaItems(items: List<MediaUploadState>): String {
+        val array = org.json.JSONArray()
+        items.forEach { item ->
+            val obj = JSONObject()
+            obj.put("uri", item.uri.toString())
+            obj.put("uploadedUrl", item.uploadedUrl)
+            obj.put("mimeType", item.mimeType)
+            obj.put("hash", item.hash)
+            obj.put("size", item.size)
+            array.put(obj)
+        }
+        return array.toString()
+    }
+
+    private fun deserializeMediaItems(json: String) {
+        try {
+            val array = org.json.JSONArray(json)
+            mediaItems.clear()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val item = MediaUploadState(
+                    id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                    uri = android.net.Uri.parse(obj.getString("uri")),
+                    mimeType = obj.optString("mimeType", null)
+                ).apply {
+                    uploadedUrl = obj.optString("uploadedUrl", null).takeIf { it != "null" && it != "" }
+                    hash = obj.optString("hash", null).takeIf { it != "null" && it != "" }
+                    size = obj.optLong("size", 0L)
+                }
+                mediaItems.add(item)
+            }
+        } catch (_: Exception) {}
     }
 
     fun setKind(kind: PostKind) {
@@ -934,9 +1171,9 @@ class ProcessTextViewModel : ViewModel() {
         }
     }
 
-    fun prepareEventJson(): String {
+    fun prepareEventJson(createdAt: Long? = null): String {
         val event = JSONObject()
-        event.put("created_at", System.currentTimeMillis() / 1000)
+        event.put("created_at", createdAt ?: (System.currentTimeMillis() / 1000))
         event.put("pubkey", pubkey ?: "")
         event.put("id", "")
         event.put("sig", "")
@@ -972,11 +1209,16 @@ class ProcessTextViewModel : ViewModel() {
                  event.put("content", quoteContent.trim())
                  
                  // NIP-84 Compliance
+                 val firstHighlightRelay = highlightRelays.firstOrNull()
                  if (highlightEventId != null) {
-                     tags.put(org.json.JSONArray().put("e").put(highlightEventId))
+                     val eTag = org.json.JSONArray().put("e").put(highlightEventId)
+                     firstHighlightRelay?.let { eTag.put(it) }
+                     tags.put(eTag)
                  }
                  if (highlightAuthor != null) {
-                     tags.put(org.json.JSONArray().put("p").put(highlightAuthor))
+                     val pTag = org.json.JSONArray().put("p").put(highlightAuthor)
+                     firstHighlightRelay?.let { pTag.put(it) }
+                     tags.put(pTag)
                  }
                  if (highlightKind != null) {
                      tags.put(org.json.JSONArray().put("k").put(highlightKind.toString()))
@@ -1006,20 +1248,42 @@ class ProcessTextViewModel : ViewModel() {
                  tags.put(org.json.JSONArray().put("title").put(title))
                  
                  mediaItems.filter { it.uploadedUrl != null }.forEach { item ->
+                     val primaryUploadedUrl = item.uploadedUrl!!
+                     
+                     // Extract file extension from the primary URL
+                     val fileExtension = primaryUploadedUrl.substringAfterLast('.', "")
+                     val filename = primaryUploadedUrl.substringAfterLast('/')
+
+                     // 1. Construct imeta tag
                      val imeta = org.json.JSONArray()
                      imeta.put("imeta")
-                     imeta.put("url ${item.uploadedUrl}")
+                     imeta.put("url $primaryUploadedUrl") // Primary URL
                      item.mimeType?.let { imeta.put("m $it") }
                      item.hash?.let { imeta.put("x $it") }
                      if (item.size > 0) imeta.put("size ${item.size}")
                      
-                     // Add imeta to tags
+                     // Get base URL of the primary uploaded URL
+                     val primaryBaseUrl = Uri.parse(primaryUploadedUrl).let { "${it.scheme}://${it.host}" }
+
+                     // Add fallback URLs to imeta
+                     item.serverResults.value.filter { it.second }.forEach { (baseUrl, _) ->
+                         if (baseUrl != primaryBaseUrl) {
+                             // Construct fallback URL using base URL, hash, and extension
+                             val fallbackUrl = "$baseUrl/$filename" // filename already contains hash and extension
+                             imeta.put("fallback $fallbackUrl")
+                         }
+                     }
+                     
                      tags.put(imeta)
                      
-                     // Add top-level tags for filtering/compatibility
+                     // 2. Add top-level tags as per NIP-68/71
                      item.mimeType?.let { tags.put(org.json.JSONArray().put("m").put(it)) }
                      item.hash?.let { tags.put(org.json.JSONArray().put("x").put(it)) }
-                     tags.put(org.json.JSONArray().put("url").put(item.uploadedUrl))
+                     
+                     // Add top-level 'url' tags for each successful base URL
+                     item.serverResults.value.filter { it.second }.forEach { (baseUrl, _) ->
+                         tags.put(org.json.JSONArray().put("url").put(baseUrl))
+                     }
                  }
                  event.put("tags", tags)
              }
@@ -1064,7 +1328,7 @@ class ProcessTextViewModel : ViewModel() {
         return events
     }
 
-    private fun publishPost(signedEventJson: String) {
+    fun publishPost(signedEventJson: String) {
         publishPosts(listOf(signedEventJson))
     }
 
@@ -1074,23 +1338,29 @@ class ProcessTextViewModel : ViewModel() {
         publishStatus = "Fetching relay list..."
         viewModelScope.launch {
             try {
-                val relays = withContext(Dispatchers.IO) {
-                    try {
+                val relaysToPublish = withContext(Dispatchers.IO) {
+                    val baseRelays = try {
                         val fetched = relayManager.fetchRelayList(pubkey!!)
                         if (fetched.isEmpty()) listOf("wss://relay.damus.io", "wss://nos.lol") else fetched
                     } catch (e: Exception) {
                         listOf("wss://relay.damus.io", "wss://nos.lol")
                     }
+                    
+                    val combinedRelays = mutableListOf<String>().apply { addAll(baseRelays) }
+                    if (settingsRepository.isCitrineRelayEnabled()) {
+                        combinedRelays.add("ws://localhost:4869")
+                    }
+                    combinedRelays.distinct() // Ensure no duplicate relays
                 }
                 
-                publishStatus = "Broadcasting ${signedEventsJson.size} post(s) to ${relays.size} relays..."
+                publishStatus = "Broadcasting ${signedEventsJson.size} post(s) to ${relaysToPublish.size} relays..."
                 val relaySuccessMap = mutableMapOf<String, Boolean>()
-                relays.forEach { relaySuccessMap[it] = false }
+                relaysToPublish.forEach { relaySuccessMap[it] = false }
                 
                 var totalPostSuccess = 0
                 signedEventsJson.forEach { signedEvent ->
                     val results = withContext(Dispatchers.IO) {
-                         relayManager.publishEvent(signedEvent, relays)
+                         relayManager.publishEvent(signedEvent, relaysToPublish)
                     }
                     if (results.any { it.value }) {
                         totalPostSuccess++
@@ -1106,7 +1376,7 @@ class ProcessTextViewModel : ViewModel() {
                 
                 val successfulRelaysCount = relaySuccessMap.count { it.value }
                 if (totalPostSuccess > 0) {
-                    publishStatus = "Success! Published to $successfulRelaysCount/${relays.size} relays."
+                    publishStatus = "Success! Published to $successfulRelaysCount/${relaysToPublish.size} relays."
                     publishSuccess = true
                     discardDraft()
                 } else {
@@ -1122,4 +1392,113 @@ class ProcessTextViewModel : ViewModel() {
         }
     }
 
+    fun finalizeBlossomServerListPublish(signedEventJson: String) {
+        isPublishing = true
+        publishStatus = "Publishing server list to relays..."
+        viewModelScope.launch {
+            try {
+                val hexKey = pubkey ?: return@launch
+                val baseRelays = relayManager.fetchRelayList(hexKey)
+                
+                val combinedRelays = mutableListOf<String>().apply { addAll(baseRelays) }
+                if (settingsRepository.isCitrineRelayEnabled()) {
+                    combinedRelays.add("ws://localhost:4869")
+                }
+                
+                val results = relayManager.publishEvent(signedEventJson, combinedRelays.distinct())
+                val successCount = results.count { it.value }
+                if (successCount > 0) {
+                    publishStatus = "Server list published to $successCount relays."
+                    publishSuccess = true
+                } else {
+                    publishStatus = "Failed to publish server list."
+                    publishSuccess = false
+                }
+            } catch (e: Exception) {
+                publishStatus = "Error: ${e.message}"
+                publishSuccess = false
+            } finally {
+                isPublishing = false
+            }
+        }
+    }
+
+    fun performUserSearch(query: String) {
+        userSearchQuery = query
+        val cleanQuery = query.trim().removePrefix("@").removePrefix("nostr:")
+        
+        if (cleanQuery.length < 2) {
+            userSearchResults.clear()
+            return
+        }
+        
+        // 1. Local Search (Instant)
+        val localMatches = mutableListOf<Pair<String, UserProfile>>()
+        usernameCache.forEach { (pk, profile) ->
+            if (profile.name?.contains(cleanQuery, ignoreCase = true) == true || pk.contains(cleanQuery, ignoreCase = true)) {
+                localMatches.add(pk to profile)
+            }
+        }
+        
+        // Also check followed pubkeys that might not be in cache
+        followedPubkeys.forEach { pk ->
+            if (pk.contains(cleanQuery, ignoreCase = true) && !usernameCache.containsKey(pk)) {
+                localMatches.add(pk to UserProfile(name = null, pictureUrl = null))
+            }
+        }
+
+        userSearchResults.clear()
+        userSearchResults.addAll(localMatches.sortedByDescending { followedPubkeys.contains(it.first) })
+        
+        // 2. Relay Search
+        isSearchingUsers = true
+        viewModelScope.launch {
+            try {
+                val relayResults = relayManager.searchUsers(cleanQuery)
+                
+                // Merge and prioritize
+                val merged = (localMatches + relayResults).distinctBy { it.first }
+                val sortedResults = merged.sortedWith(compareByDescending<Pair<String, UserProfile>> { 
+                    followedPubkeys.contains(it.first)
+                }.thenBy { it.second.name?.lowercase() ?: "" })
+                
+                userSearchResults.clear()
+                userSearchResults.addAll(sortedResults)
+                
+                // Update username cache with relay data (includes pics)
+                var cacheUpdated = false
+                relayResults.forEach { (pk, profile) ->
+                    if (profile.name?.isNotEmpty() == true) {
+                        usernameCache[pk] = profile
+                        cacheUpdated = true
+                    }
+                }
+                if (cacheUpdated) {
+                    settingsRepository.setUsernameCache(usernameCache.toMap())
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isSearchingUsers = false
+            }
+        }
+    }
+
+    fun resolveUsername(npub: String) {
+        val entity = NostrUtils.findNostrEntity(npub) ?: return
+        if (entity.type != "npub" && entity.type != "nprofile") return
+        val pubkey = entity.id
+        
+        if (usernameCache.containsKey(pubkey) && usernameCache[pubkey]?.name != null) return
+        
+        viewModelScope.launch {
+            try {
+                val profile = relayManager.fetchUserProfile(pubkey)
+                if (profile != null) {
+                    usernameCache[pubkey] = profile
+                    settingsRepository.setUsernameCache(usernameCache.toMap())
+                }
+            } catch (_: Exception) {}
+        }
+    }
 }

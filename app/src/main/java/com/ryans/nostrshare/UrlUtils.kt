@@ -15,23 +15,34 @@ object UrlUtils {
     fun cleanUrl(url: String): String {
         try {
             val uri = url.toUri()
+            val scheme = uri.scheme?.lowercase()
+            if (scheme != "http" && scheme != "https") return url
+
             val builder = uri.buildUpon().clearQuery()
 
             val originalParams = uri.queryParameterNames
-            var hasParams = false
             
             for (param in originalParams) {
                 if (!TRACKING_PARAMS.contains(param.lowercase())) {
                     for (value in uri.getQueryParameters(param)) {
                         builder.appendQueryParameter(param, value)
-                        hasParams = true
                     }
                 }
             }
 
             return builder.build().toString()
         } catch (e: Exception) {
-            return url // Return original if parsing fails
+            return url
+        }
+    }
+
+    /**
+     * Finds all URLs in a text block and cleans them.
+     */
+    fun cleanText(text: String): String {
+        val urlRegex = "https?://[^\\s]+".toRegex()
+        return urlRegex.replace(text) { match ->
+            cleanUrl(match.value)
         }
     }
 }

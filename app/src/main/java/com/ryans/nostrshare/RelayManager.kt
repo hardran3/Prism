@@ -12,12 +12,21 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.util.Log
 
 class RelayManager(
     private val client: OkHttpClient,
     private val settingsRepository: SettingsRepository
 ) {
     private val bootstrapRelays = listOf("wss://relay.damus.io", "wss://nos.lol")
+    private val indexerRelays = listOf(
+        "wss://purplepag.es", 
+        "wss://indexer.coracle.social", 
+        "wss://user.kindpag.es",
+        "wss://relay.primal.net",
+        "wss://relay.snort.social",
+        "wss://nostr.mom"
+    )
 
     suspend fun fetchRelayList(pubkey: String): List<String> = withContext(Dispatchers.IO) {
         val relayList = mutableSetOf<String>()
@@ -27,8 +36,10 @@ class RelayManager(
             relayList.add("wss://sendit.nosflare.com/")
         }
 
-        // Simple implementation: try one by one or race them. For simplicity, race first success.
-        for (url in bootstrapRelays) {
+        // Try indexers first as they are most reliable forKind 10002
+        val targetRelays = indexerRelays + bootstrapRelays
+        
+        for (url in targetRelays) {
             val request = Request.Builder().url(url).build()
             val listener = object : WebSocketListener() {
                 val subId = UUID.randomUUID().toString()
@@ -60,7 +71,9 @@ class RelayManager(
                                         val marker = if (tag.length() > 2) tag.getString(2) else ""
                                         // Add if write or unspecified (read/write)
                                         if (marker == "write" || marker == "") {
-                                            relayList.add(relayUrl)
+                                            synchronized(relayList) {
+                                                relayList.add(relayUrl)
+                                            }
                                         }
                                     }
                                 }
@@ -102,6 +115,7 @@ class RelayManager(
             val request = Request.Builder().url(url).build()
              val listener = object : WebSocketListener() {
                  override fun onOpen(webSocket: WebSocket, response: Response) {
+                     Log.d("RelayManager", "PublishEvent: WebSocket opened for $url")
                      val msg = JSONArray()
                      msg.put("EVENT")
                      msg.put(JSONObject(signedEventJson))
@@ -113,43 +127,59 @@ class RelayManager(
                          val json = JSONArray(text)
                          if (json.optString(0) == "OK") {
                              val success = json.optBoolean(2)
-                             results[url] = success
+                             synchronized(results) {
+                                 results[url] = success
+                             }
+                             Log.d("RelayManager", "PublishEvent: Received OK from $url, success: $success")
                              webSocket.close(1000, "Done")
                              latch.countDown()
+                         } else {
+                             Log.d("RelayManager", "PublishEvent: Received non-OK message from $url: $text")
                          }
                      } catch (_: Exception) {
-                        // ignore
+                        Log.e("RelayManager", "PublishEvent: Error parsing message from $url: $text")
                      }
                  }
 
                  override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                     results[url] = false
+                     Log.e("RelayManager", "PublishEvent: WebSocket failure for $url: ${t.message}", t)
+                     synchronized(results) {
+                         results[url] = false
+                     }
+                     webSocket.close(1000, "Failure") // Explicitly close on failure
                      latch.countDown()
                  }
                  
                  override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                     if (results[url] == null) {
-                        results[url] = false
-                        latch.countDown()
+                     Log.d("RelayManager", "PublishEvent: WebSocket closing for $url with code $code, reason: $reason")
+                     synchronized(results) {
+                         if (results[url] == null) {
+                            results[url] = false
+                            latch.countDown()
+                         }
                      }
                  }
-             }
+             } // Correctly close the WebSocketListener object here
              client.newWebSocket(request, listener)
         }
 
         try {
-            latch.await(10, TimeUnit.SECONDS)
+            latch.await(5, TimeUnit.SECONDS)
         } catch (_: InterruptedException) {
             // Timeout
         }
         
         return@withContext results
     }
-    suspend fun fetchUserProfile(pubkey: String): UserProfile? = withContext(Dispatchers.IO) {
-        val latch = CountDownLatch(1)
-        var profile: UserProfile? = null
 
-        for (url in bootstrapRelays) {
+    suspend fun fetchUserProfile(pubkey: String): UserProfile? = withContext(Dispatchers.IO) {
+        var profile: UserProfile? = null
+        
+        // Use indexers for metadata lookups
+        val targetRelays = indexerRelays + bootstrapRelays
+        val latch = CountDownLatch(targetRelays.size)
+
+        for (url in targetRelays) {
             val request = Request.Builder().url(url).build()
             val listener = object : WebSocketListener() {
                 val subId = UUID.randomUUID().toString()
@@ -172,19 +202,21 @@ class RelayManager(
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
                             val event = json.getJSONObject(2)
-                            val contentStr = event.optString("content")
-                            if (contentStr.isNotEmpty()) {
-                                val content = JSONObject(contentStr)
-                                profile = UserProfile(
-                                    name = content.optString("name", "").ifEmpty { content.optString("display_name") },
-                                    pictureUrl = content.optString("picture"),
-                                    lud16 = content.optString("lud16")
-                                )
-                            }
+                            try {
+                                val content = JSONObject(event.optString("content"))
+                                synchronized(this@RelayManager) {
+                                    profile = UserProfile(
+                                        name = content.optString("name").ifEmpty { content.optString("display_name") },
+                                        pictureUrl = content.optString("picture"),
+                                        lud16 = content.optString("lud16")
+                                    )
+                                }
+                            } catch (_: Exception) {}
                             webSocket.close(1000, "Done")
                             latch.countDown()
                         } else if (type == "EOSE" && json.optString(1) == subId) {
-                           webSocket.close(1000, "EOSE")
+                            webSocket.close(1000, "EOSE")
+                            latch.countDown()
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -192,7 +224,8 @@ class RelayManager(
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                     // Fail silently
+                    webSocket.close(1000, "Failure") // Explicitly close on failure
+                    latch.countDown()
                 }
             }
             client.newWebSocket(request, listener)
@@ -200,16 +233,100 @@ class RelayManager(
         
         try {
             latch.await(5, TimeUnit.SECONDS)
-        } catch (e: InterruptedException) { }
+        } catch (_: InterruptedException) { }
         
         return@withContext profile
+    }
+    
+    suspend fun fetchUserProfiles(
+        pubkeys: List<String>,
+        onProfileFound: ((String, UserProfile) -> Unit)? = null
+    ): Map<String, UserProfile> = withContext(Dispatchers.IO) {
+        if (pubkeys.isEmpty()) return@withContext emptyMap()
+        
+        val results = mutableMapOf<String, UserProfile>()
+        
+        // Chunk pubkeys into batches of 50 to avoid relay filter limits
+        val chunks = pubkeys.chunked(50)
+        
+        for (chunk in chunks) {
+            val latch = CountDownLatch(indexerRelays.size)
+            
+            for (url in indexerRelays) {
+                val request = Request.Builder().url(url).build()
+                val listener = object : WebSocketListener() {
+                    val subId = UUID.randomUUID().toString()
+                    
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        try {
+                            val filter = JSONObject()
+                            filter.put("kinds", JSONArray().put(0)) 
+                            val authors = JSONArray()
+                            chunk.forEach { authors.put(it) }
+                            filter.put("authors", authors)
+                            
+                            val req = JSONArray()
+                            req.put("REQ")
+                            req.put(subId)
+                            req.put(filter)
+                            webSocket.send(req.toString())
+                        } catch (_: Exception) {
+                            webSocket.close(1000, "Error")
+                            latch.countDown()
+                        }
+                    }
+
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        try {
+                            val json = JSONArray(text)
+                            val type = json.optString(0)
+                            if (type == "EVENT" && json.optString(1) == subId) {
+                                val event = json.getJSONObject(2)
+                                val pk = event.optString("pubkey")
+                                try {
+                                    val content = JSONObject(event.optString("content"))
+                                    val profile = UserProfile(
+                                        name = content.optString("name").ifEmpty { content.optString("display_name") },
+                                        pictureUrl = content.optString("picture"),
+                                        lud16 = content.optString("lud16")
+                                    )
+                                    synchronized(results) { 
+                                        if (!results.containsKey(pk)) {
+                                            results[pk] = profile
+                                            onProfileFound?.invoke(pk, profile)
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                            } else if (type == "EOSE" && json.optString(1) == subId) {
+                                webSocket.close(1000, "EOSE")
+                                latch.countDown()
+                            }
+                        } catch (e: Exception) { }
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        latch.countDown()
+                    }
+                }
+                client.newWebSocket(request, listener)
+            }
+            
+            try {
+                // Wait up to 3 seconds per chunk
+                latch.await(3, TimeUnit.SECONDS)
+            } catch (_: Exception) {}
+        }
+        
+        return@withContext results
     }
 
     suspend fun fetchBlossomServerList(pubkey: String): List<String> = withContext(Dispatchers.IO) {
         val serverList = mutableSetOf<String>()
         val latch = CountDownLatch(1)
+        
+        val targetRelays = indexerRelays + bootstrapRelays
 
-        for (url in bootstrapRelays) {
+        for (url in targetRelays) {
             val request = Request.Builder().url(url).build()
             val listener = object : WebSocketListener() {
                 val subId = UUID.randomUUID().toString()
@@ -237,7 +354,9 @@ class RelayManager(
                                 for (i in 0 until tags.length()) {
                                     val tag = tags.getJSONArray(i)
                                     if (tag.length() > 1 && tag.getString(0) == "server") {
-                                        serverList.add(tag.getString(1))
+                                        synchronized(serverList) {
+                                            serverList.add(tag.getString(1))
+                                        }
                                     }
                                 }
                             }
@@ -263,6 +382,69 @@ class RelayManager(
         } catch (e: InterruptedException) { }
         
         return@withContext serverList.toList()
+    }
+
+    suspend fun fetchContactList(pubkey: String, relays: List<String> = emptyList()): Set<String> = withContext(Dispatchers.IO) {
+        val follows = mutableSetOf<String>()
+        val latch = CountDownLatch(1)
+        val targetRelays = if (relays.isNotEmpty()) relays else (indexerRelays + bootstrapRelays)
+
+        for (url in targetRelays) {
+            val request = Request.Builder().url(url).build()
+            val listener = object : WebSocketListener() {
+                val subId = UUID.randomUUID().toString()
+                
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    val filter = JSONObject()
+                    filter.put("kinds", JSONArray().put(3)) // Kind 3: Contacts
+                    filter.put("authors", JSONArray().put(pubkey))
+                    filter.put("limit", 1)
+                    val req = JSONArray()
+                    req.put("REQ")
+                    req.put(subId)
+                    req.put(filter)
+                    webSocket.send(req.toString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val json = JSONArray(text)
+                        val type = json.optString(0)
+                        if (type == "EVENT" && json.optString(1) == subId) {
+                            val event = json.getJSONObject(2)
+                            val tags = event.optJSONArray("tags")
+                            if (tags != null) {
+                                for (i in 0 until tags.length()) {
+                                    val tag = tags.getJSONArray(i)
+                                    if (tag.length() > 1 && tag.getString(0) == "p") {
+                                        synchronized(follows) {
+                                            follows.add(tag.getString(1))
+                                        }
+                                    }
+                                }
+                            }
+                            webSocket.close(1000, "Done")
+                            latch.countDown()
+                        } else if (type == "EOSE" && json.optString(1) == subId) {
+                           webSocket.close(1000, "EOSE")
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                     latch.countDown()
+                }
+            }
+            client.newWebSocket(request, listener)
+        }
+        
+        try {
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) { }
+        
+        return@withContext follows
     }
 
     suspend fun fetchEvent(eventId: String, relays: List<String> = emptyList()): JSONObject? = withContext(Dispatchers.IO) {
@@ -291,7 +473,9 @@ class RelayManager(
                         val json = JSONArray(text)
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
-                            result = json.getJSONObject(2)
+                            synchronized(this@RelayManager) { // Synchronize on the outer class instance
+                                result = json.getJSONObject(2)
+                            }
                             webSocket.close(1000, "Done")
                             latch.countDown()
                         } else if (type == "EOSE" && json.optString(1) == subId) {
@@ -345,7 +529,9 @@ class RelayManager(
                         val json = JSONArray(text)
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
-                            result = json.getJSONObject(2)
+                            synchronized(this@RelayManager) { // Synchronize on the outer class instance
+                                result = json.getJSONObject(2)
+                            }
                             webSocket.close(1000, "Done")
                             latch.countDown()
                         } else if (type == "EOSE" && json.optString(1) == subId) {
@@ -367,6 +553,83 @@ class RelayManager(
         } catch (e: InterruptedException) { }
         
         return@withContext result
+    }
+    
+    suspend fun searchUsers(query: String): List<Pair<String, UserProfile>> = withContext(Dispatchers.IO) {
+        val searchRelays = listOf(
+            "wss://relay.noswhere.com",
+            "wss://nostr.wine",
+            "wss://search.nos.today"
+        )
+        val results = mutableMapOf<String, UserProfile>()
+        val latch = CountDownLatch(searchRelays.size)
+
+        for (url in searchRelays) {
+            val request = Request.Builder().url(url).build()
+            val listener = object : WebSocketListener() {
+                val subId = UUID.randomUUID().toString()
+                
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    val filter = JSONObject()
+                    filter.put("kinds", JSONArray().put(0)) // Kind 0: Metadata
+                    filter.put("search", query)
+                    filter.put("limit", 15)
+                    
+                    val req = JSONArray()
+                    req.put("REQ")
+                    req.put(subId)
+                    req.put(filter)
+                    webSocket.send(req.toString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val json = JSONArray(text)
+                        val type = json.optString(0)
+                        if (type == "EVENT" && json.optString(1) == subId) {
+                            val event = json.getJSONObject(2)
+                            val pubkey = event.optString("pubkey")
+                            val contentStr = event.optString("content")
+                            if (contentStr.isNotEmpty() && pubkey.isNotEmpty()) {
+                                try {
+                                    val content = JSONObject(contentStr)
+                                    val profile = UserProfile(
+                                        name = content.optString("name", "").ifEmpty { content.optString("display_name") },
+                                        pictureUrl = content.optString("picture"),
+                                        lud16 = content.optString("lud16")
+                                    )
+                                    synchronized(results) {
+                                        results[pubkey] = profile
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        } else if (type == "EOSE" && json.optString(1) == subId) {
+                           webSocket.close(1000, "EOSE")
+                           latch.countDown()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                     latch.countDown()
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    if (latch.count > 0) {
+                        latch.countDown()
+                    }
+                }
+            }
+            client.newWebSocket(request, listener)
+        }
+        
+        try {
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) { }
+        
+        return@withContext results.toList()
     }
 
     fun createBlossomServerListEventJson(pubkey: String, servers: List<String>): String {
@@ -391,8 +654,4 @@ class RelayManager(
     }
 }
 
-data class UserProfile(
-    val name: String?,
-    val pictureUrl: String?,
-    val lud16: String? = null
-)
+

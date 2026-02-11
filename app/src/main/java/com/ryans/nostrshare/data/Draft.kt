@@ -10,7 +10,13 @@ data class Draft(
     val kind: Int,
     val mediaJson: String, // Serialized list of MediaUploadState
     val mediaTitle: String,
+    val highlightEventId: String? = null,
+    val highlightAuthor: String? = null,
+    val highlightKind: Int? = null,
+    val highlightIdentifier: String? = null,
+    val highlightRelaysJson: String? = null, // Serialized List<String>
     val lastEdited: Long = System.currentTimeMillis(),
+    val pubkey: String? = null,
     val scheduledAt: Long? = null,
     val signedJson: String? = null,
     val isScheduled: Boolean = false,

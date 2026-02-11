@@ -27,14 +27,69 @@ object NostrUtils {
                     "note1" -> NostrEntity("note", decoded.toHex(), bech32)
                     "npub1" -> NostrEntity("npub", decoded.toHex(), bech32)
                     "nevent1" -> parseNevent(decoded, bech32)
+                    "nprofile1" -> parseNprofile(decoded, bech32)
                     "naddr1" -> parseNaddr(decoded, bech32)
-                    else -> null // Handle others if needed
+                    else -> null
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
         return null
+    }
+
+    fun pubkeyToNpub(pubkey: String): String {
+        return try {
+            Bech32.encode("npub", pubkey.hexToBytes())
+        } catch (e: Exception) {
+            pubkey
+        }
+    }
+
+    fun pubkeyToNprofile(pubkey: String): String {
+        return try {
+            val bytes = pubkey.hexToBytes()
+            // TLV: type 0 (pubkey), length 32
+            val tlv = mutableListOf<Byte>()
+            tlv.add(0.toByte())
+            tlv.add(32.toByte())
+            bytes.forEach { tlv.add(it) }
+            
+            // Add indexer relay as a hint (optional but good)
+            val relay = "wss://indexer.coracle.social".toByteArray(Charsets.UTF_8)
+            tlv.add(1.toByte())
+            tlv.add(relay.size.toByte())
+            relay.forEach { tlv.add(it) }
+            
+            Bech32.encode("nprofile", tlv.toByteArray())
+        } catch (e: Exception) {
+            pubkey
+        }
+    }
+
+    private fun parseNprofile(bytes: ByteArray, bech32: String): NostrEntity? {
+        var pubkey = ""
+        val relays = mutableListOf<String>()
+        
+        var i = 0
+        while (i < bytes.size) {
+            val type = bytes[i].toInt()
+            if (i + 1 >= bytes.size) break
+            val length = bytes[i + 1].toInt() and 0xFF
+            i += 2
+            if (i + length > bytes.size) break
+            
+            val value = bytes.sliceArray(i until i + length)
+            when (type) {
+                0 -> pubkey = value.toHex()
+                1 -> relays.add(String(value, Charsets.UTF_8))
+            }
+            i += length
+        }
+        
+        return if (pubkey.isNotEmpty()) {
+            NostrEntity("nprofile", pubkey, bech32, pubkey, relays)
+        } else null
     }
 
     private fun parseNevent(bytes: ByteArray, bech32: String): NostrEntity? {
@@ -113,6 +168,17 @@ object NostrUtils {
         return joinToString("") { "%02x".format(it.toInt() and 0xFF) }
     }
 
+    private fun String.hexToBytes(): ByteArray {
+        val len = length
+        val data = ByteArray(len / 2)
+        var i = 0
+        while (i < len) {
+            data[i / 2] = ((Character.digit(this[i], 16) shl 4) + Character.digit(this[i + 1], 16)).toByte()
+            i += 2
+        }
+        return data
+    }
+
     // Bech32 implementation (Moved from Models.kt and refined)
     object Bech32 {
         private const val CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
@@ -132,6 +198,19 @@ object NostrUtils {
 
             val dataValues = values.dropLast(6)
             return convertBits(dataValues, 5, 8, false)
+        }
+
+        fun encode(hrp: String, data: ByteArray): String {
+            val values = convertBits(data.toList().map { it.toInt() and 0xFF }, 8, 5, true).map { it.toInt() }
+            val checksum = createChecksum(hrp, values)
+            val combined = values + checksum
+            return hrp + "1" + combined.map { CHARSET[it] }.joinToString("")
+        }
+
+        private fun createChecksum(hrp: String, values: List<Int>): List<Int> {
+            val expand = hrpExpand(hrp)
+            val mod = polymod(expand + values + listOf(0, 0, 0, 0, 0, 0)) xor 1
+            return (0..5).map { (mod shr (5 * (5 - it))) and 31 }
         }
 
         private fun verifyChecksum(hrp: String, values: List<Int>): Boolean {

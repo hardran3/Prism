@@ -44,11 +44,14 @@ class SettingsRepository(private val appContext: Context) {
     fun getCompressionLevel(): Int = prefs.getInt("compression_level", COMPRESSION_MEDIUM)
     fun setCompressionLevel(level: Int) = prefs.edit().putInt("compression_level", level).apply()
 
-    fun isBlastrEnabled(): Boolean = prefs.getBoolean("blastr_enabled", false)
+    fun isBlastrEnabled(): Boolean = prefs.getBoolean("blastr_enabled", true)
     fun setBlastrEnabled(enabled: Boolean) = prefs.edit().putBoolean("blastr_enabled", enabled).apply()
 
     fun isHapticEnabled(): Boolean = prefs.getBoolean("haptic_enabled", true)
     fun setHapticEnabled(enabled: Boolean) = prefs.edit().putBoolean("haptic_enabled", enabled).apply()
+
+    fun isCitrineRelayEnabled(): Boolean = prefs.getBoolean("citrine_relay_enabled", false)
+    fun setCitrineRelayEnabled(enabled: Boolean) = prefs.edit().putBoolean("citrine_relay_enabled", enabled).apply()
 
     fun getBlossomServers(): List<BlossomServer> {
         val jsonString = prefs.getString("blossom_servers_json", null)
@@ -84,5 +87,44 @@ class SettingsRepository(private val appContext: Context) {
     // Helper for VM
     fun getEnabledBlossomServers(): List<String> {
         return getBlossomServers().filter { it.enabled }.map { it.url }
+    }
+
+    fun getFollowedPubkeys(): Set<String> {
+        return prefs.getStringSet("followed_pubkeys", emptySet()) ?: emptySet()
+    }
+
+    fun setFollowedPubkeys(pubkeys: Set<String>) {
+        prefs.edit().putStringSet("followed_pubkeys", pubkeys).apply()
+    }
+
+    fun getUsernameCache(): Map<String, UserProfile> {
+        val jsonString = prefs.getString("username_cache_json_v2", null) ?: return emptyMap()
+        val result = mutableMapOf<String, UserProfile>()
+        try {
+            val obj = org.json.JSONObject(jsonString)
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val profileJson = obj.getJSONObject(key)
+                result[key] = UserProfile(
+                    name = profileJson.optString("name", null),
+                    pictureUrl = profileJson.optString("picture", null),
+                    lud16 = profileJson.optString("lud16", null)
+                )
+            }
+        } catch (_: Exception) {}
+        return result
+    }
+
+    fun setUsernameCache(cache: Map<String, UserProfile>) {
+        val obj = org.json.JSONObject()
+        cache.forEach { (pk, profile) ->
+            val profileJson = org.json.JSONObject()
+            profileJson.put("name", profile.name)
+            profileJson.put("picture", profile.pictureUrl)
+            profileJson.put("lud16", profile.lud16)
+            obj.put(pk, profileJson)
+        }
+        prefs.edit().putString("username_cache_json_v2", obj.toString()).apply()
     }
 }

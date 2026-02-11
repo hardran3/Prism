@@ -14,6 +14,12 @@ interface DraftDao {
     @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 1 ORDER BY scheduledAt DESC")
     fun getScheduledHistory(): Flow<List<Draft>>
 
+    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 0")
+    suspend fun getScheduledDrafts(): List<Draft>
+
+    @Query("SELECT COUNT(*) FROM drafts WHERE isScheduled = 1 AND isCompleted = 0")
+    fun getScheduledCount(): Int
+
     @Query("DELETE FROM drafts WHERE isScheduled = 1 AND isCompleted = 1")
     suspend fun deleteCompletedScheduled()
 

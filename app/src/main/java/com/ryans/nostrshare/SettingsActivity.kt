@@ -114,7 +114,7 @@ fun SettingsScreen(
     onLogin: () -> Unit
 ) {
     var selectedTabIndex by remember { mutableStateOf(0) }
-    val tabs = listOf("General", "Blossom", "About")
+    val tabs = listOf("General", "Nostr", "Blossom", "About")
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel.publishStatus) {
@@ -160,8 +160,9 @@ fun SettingsScreen(
             
             when (selectedTabIndex) {
                 0 -> GeneralSettingsTab(repo)
-                1 -> BlossomSettingsTab(repo, viewModel, onLogin)
-                2 -> AboutSettingsTab(repo)
+                1 -> NostrSettingsTab(repo)
+                2 -> BlossomSettingsTab(repo, viewModel, onLogin)
+                3 -> AboutSettingsTab(repo)
             }
         }
     }
@@ -169,8 +170,6 @@ fun SettingsScreen(
 
 @Composable
 fun GeneralSettingsTab(repo: SettingsRepository) {
-    var alwaysKind1 by remember { mutableStateOf(repo.isAlwaysUseKind1()) }
-    var blastrEnabled by remember { mutableStateOf(repo.isBlastrEnabled()) }
     var hapticEnabled by remember { mutableStateOf(repo.isHapticEnabled()) }
     
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -181,30 +180,6 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
             .padding(16.dp),
         horizontalAlignment = Alignment.Start
     ) {
-             
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Default To Kind 1", style = MaterialTheme.typography.bodyLarge)
-                Text("Start all posts as Text Notes.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(
-                checked = alwaysKind1,
-                onCheckedChange = { 
-                    if (repo.isHapticEnabled()) {
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                    }
-                    alwaysKind1 = it
-                    repo.setAlwaysUseKind1(it)
-                }
-            )
-        }
-        
-        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-        
         Column(modifier = Modifier.fillMaxWidth()) {
             Text("Image Compression", style = MaterialTheme.typography.bodyLarge)
             Text("Balance between file size and visual quality.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -241,6 +216,81 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
         }
         
         HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Haptic Feedback", style = MaterialTheme.typography.bodyLarge)
+                Text("Tactile vibrations on interactions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(
+                checked = hapticEnabled,
+                onCheckedChange = { 
+                    if (it) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    }
+                    hapticEnabled = it
+                    repo.setHapticEnabled(it)
+                }
+            )
+        }
+        
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+        
+        var showLogDialog by remember { mutableStateOf(false) }
+        
+        OutlinedButton(
+            onClick = { showLogDialog = true },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("View Scheduler Logs")
+        }
+        
+        if (showLogDialog) {
+            SchedulerLogDialog(onDismiss = { showLogDialog = false })
+        }
+    }
+}
+
+@Composable
+fun NostrSettingsTab(repo: SettingsRepository) {
+    var alwaysKind1 by remember { mutableStateOf(repo.isAlwaysUseKind1()) }
+    var blastrEnabled by remember { mutableStateOf(repo.isBlastrEnabled()) }
+    var citrineRelayEnabled by remember { mutableStateOf(repo.isCitrineRelayEnabled()) }
+    
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.Start
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Default To Kind 1", style = MaterialTheme.typography.bodyLarge)
+                Text("Start all posts as Text Notes.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(
+                checked = alwaysKind1,
+                onCheckedChange = { 
+                    if (repo.isHapticEnabled()) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    }
+                    alwaysKind1 = it
+                    repo.setAlwaysUseKind1(it)
+                }
+            )
+        }
+        
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
         
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -264,28 +314,73 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-
+        
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Haptic Feedback", style = MaterialTheme.typography.bodyLarge)
-                Text("Tactile vibrations on interactions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Citrine Local Relay", style = MaterialTheme.typography.bodyLarge)
+                Text("Post to ws://localhost:4869 (e.g., Citrine app)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Switch(
-                checked = hapticEnabled,
-                onCheckedChange = { 
-                    if (it) {
+                checked = citrineRelayEnabled,
+                onCheckedChange = {
+                    if (repo.isHapticEnabled()) {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     }
-                    hapticEnabled = it
-                    repo.setHapticEnabled(it)
+                    citrineRelayEnabled = it
+                    repo.setCitrineRelayEnabled(it)
                 }
             )
         }
     }
+}
+
+@Composable
+fun SchedulerLogDialog(onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var logs by remember { mutableStateOf("") }
+    val coroutineScope = rememberCoroutineScope()
+    
+    LaunchedEffect(Unit) {
+        logs = com.ryans.nostrshare.utils.SchedulerLog.getLogs(context)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Scheduler Logs") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = logs,
+                    onValueChange = {},
+                    readOnly = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(300.dp)
+                        .verticalScroll(rememberScrollState()),
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        com.ryans.nostrshare.utils.SchedulerLog.clearLogs(context)
+                        logs = "Logs cleared."
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Clear Logs")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 @Composable

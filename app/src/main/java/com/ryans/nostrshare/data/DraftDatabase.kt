@@ -3,7 +3,7 @@ package com.ryans.nostrshare.data
 import android.content.Context
 import androidx.room.*
 
-@Database(entities = [Draft::class], version = 2)
+@Database(entities = [Draft::class], version = 4, exportSchema = false)
 abstract class DraftDatabase : RoomDatabase() {
     abstract fun draftDao(): DraftDao
 
