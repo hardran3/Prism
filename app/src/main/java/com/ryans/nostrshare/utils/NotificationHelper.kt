@@ -44,9 +44,9 @@ object NotificationHelper {
                 val contextApp = context.applicationContext
                 val db = try {
                     (contextApp as? com.ryans.nostrshare.NostrShareApp)?.database
-                        ?: com.ryans.nostrshare.data.DraftDatabase.getDatabase(contextApp)
+                        ?: DraftDatabase.getDatabase(contextApp)
                 } catch (e: Exception) {
-                    com.ryans.nostrshare.data.DraftDatabase.getDatabase(contextApp)
+                    DraftDatabase.getDatabase(contextApp)
                 }
                 
                 val count = db.draftDao().getScheduledCount() // We need to add this method to DAO

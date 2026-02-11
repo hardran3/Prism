@@ -13,7 +13,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         // Redirect to ProcessTextActivity
-        val intent = android.content.Intent(this, ProcessTextActivity::class.java)
+        val intent = Intent(this, ProcessTextActivity::class.java)
         intent.putExtra("LAUNCH_MODE", "NOTE") // Explicitly marking as note mode
         startActivity(intent)
         finish()

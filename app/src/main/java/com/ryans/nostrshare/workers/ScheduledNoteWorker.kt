@@ -51,17 +51,23 @@ class ScheduledNoteWorker(
 
         try {
             // Find relays for the user
-            val relays = try {
+            val baseRelays = try {
                 val fetched = relayManager.fetchRelayList(pubkey)
                 if (fetched.isEmpty()) listOf("wss://relay.damus.io", "wss://nos.lol") else fetched
             } catch (_: Exception) {
                 listOf("wss://relay.damus.io", "wss://nos.lol")
             }
 
-            com.ryans.nostrshare.utils.SchedulerLog.log(applicationContext, "ScheduledNoteWorker", "Publishing to ${relays.size} relays")
+            val targetRelays = mutableListOf<String>().apply { addAll(baseRelays) }
+            if (settingsRepository.isCitrineRelayEnabled()) {
+                targetRelays.add("ws://localhost:4869")
+            }
+            val finalRelays = targetRelays.distinct()
+
+            com.ryans.nostrshare.utils.SchedulerLog.log(applicationContext, "ScheduledNoteWorker", "Publishing to ${finalRelays.size} relays")
 
             // Publish
-            val results = relayManager.publishEvent(signedJson, relays)
+            val results = relayManager.publishEvent(signedJson, finalRelays)
             
             if (results.any { it.value }) {
                 com.ryans.nostrshare.utils.SchedulerLog.log(applicationContext, "ScheduledNoteWorker", "Success! Published to at least one relay.")

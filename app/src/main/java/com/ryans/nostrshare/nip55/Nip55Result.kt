@@ -12,11 +12,11 @@ sealed class Nip55Result<out T> {
  * Possible errors during NIP-55 operations.
  */
 sealed class Nip55Error : Exception() {
-    object UserRejected : Nip55Error() {
+    class UserRejected : Nip55Error() {
         override val message: String = "User rejected the operation"
     }
 
-    object NotLoggedIn : Nip55Error() {
+    class NotLoggedIn : Nip55Error() {
         override val message: String = "User is not logged in to the signer"
     }
 

@@ -12,7 +12,7 @@ private inline fun <T> parseNip55Result(
     transform: (result: String, intent: Intent) -> T
 ): Nip55Result<T> {
     if (resultCode != Activity.RESULT_OK) {
-        return Nip55Result.Error(Nip55Error.UserRejected)
+        return Nip55Result.Error(Nip55Error.UserRejected())
     }
 
     if (intent == null) {
@@ -72,7 +72,7 @@ class SignEventContract : ActivityResultContract<SignEventContract.Input, Nip55R
 
     override fun parseResult(resultCode: Int, intent: Intent?): Nip55Result<SignEventResult> {
         if (resultCode != Activity.RESULT_OK) {
-            return Nip55Result.Error(Nip55Error.UserRejected)
+            return Nip55Result.Error(Nip55Error.UserRejected())
         }
 
         if (intent == null) {
@@ -121,7 +121,7 @@ class SignEventsContract : ActivityResultContract<SignEventsContract.Input, Nip5
 
     override fun parseResult(resultCode: Int, intent: Intent?): Nip55Result<SignEventsResult> {
         if (resultCode != Activity.RESULT_OK) {
-            return Nip55Result.Error(Nip55Error.UserRejected)
+            return Nip55Result.Error(Nip55Error.UserRejected())
         }
 
         if (intent == null) {

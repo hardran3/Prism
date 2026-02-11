@@ -83,7 +83,7 @@ class ProcessTextViewModel : ViewModel() {
     var deleteServerResults by mutableStateOf<List<Pair<String, Boolean>>>(emptyList())
 
     // Legacy/Compat variables (Will be deprecated as multi-media matures)
-    var mediaUri by mutableStateOf<android.net.Uri?>(null)
+    var mediaUri by mutableStateOf<Uri?>(null)
     var mediaMimeType by mutableStateOf<String?>(null)
     var uploadedMediaUrl by mutableStateOf<String?>(null)
     var uploadedMediaHash by mutableStateOf<String?>(null)
@@ -312,7 +312,7 @@ class ProcessTextViewModel : ViewModel() {
                             val authorPubkey = event.optString("pubkey")
                             if (authorPubkey.isNotEmpty()) {
                                 val profile = relayManager.fetchUserProfile(authorPubkey)
-                                val authorName = profile?.name ?: authorPubkey.take(8)
+                                profile?.name ?: authorPubkey.take(8)
                                 sourceUrl = "nostr:${entity.bech32}"
                                 
                                 // Store NIP-84 Metadata
@@ -400,7 +400,7 @@ class ProcessTextViewModel : ViewModel() {
             )
             val id = draftDao.insertDraft(draft)
             com.ryans.nostrshare.utils.SchedulerUtils.enqueueScheduledWork(
-                com.ryans.nostrshare.NostrShareApp.getInstance(),
+                NostrShareApp.getInstance(),
                 draft.copy(id = id.toInt())
             )
             
@@ -414,8 +414,8 @@ class ProcessTextViewModel : ViewModel() {
         viewModelScope.launch {
             draftDao.deleteDraft(draft)
             
-            val context = com.ryans.nostrshare.NostrShareApp.getInstance()
-            val alarmManager = context.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+            val context = NostrShareApp.getInstance()
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
             
             val intent = android.content.Intent(context, com.ryans.nostrshare.receivers.ScheduleReceiver::class.java).apply {
                 action = com.ryans.nostrshare.receivers.ScheduleReceiver.ACTION_PUBLISH_SCHEDULED
@@ -457,7 +457,7 @@ class ProcessTextViewModel : ViewModel() {
     var isSearchingUsers by mutableStateOf(false)
     var showUserSearchDialog by mutableStateOf(false)
     
-    fun onMediaSelected(context: Context, uris: List<android.net.Uri>) {
+    fun onMediaSelected(context: Context, uris: List<Uri>) {
         uris.forEach { uri ->
             val mimeType = context.contentResolver.getType(uri) ?: "image/*"
             val item = MediaUploadState(
@@ -547,7 +547,7 @@ class ProcessTextViewModel : ViewModel() {
     
     // Pending upload state for multi-server
     private var pendingServers: List<String> = emptyList()
-    private var processedMediaUri: android.net.Uri? = null // Processed/optimized media URI
+    private var processedMediaUri: Uri? = null // Processed/optimized media URI
     
     private var lastProcessedWithOptimize: Boolean? = null
 
@@ -598,7 +598,7 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun initiateBatchUpload(context: Context) {
-        val pk = pubkey ?: return
+        pubkey ?: return
         val itemsToUpload = mediaItems.filter { it.uploadedUrl == null && !it.isUploading && !it.isProcessing }
         if (itemsToUpload.isEmpty()) {
             isBatchUploading = false
@@ -1102,7 +1102,7 @@ class ProcessTextViewModel : ViewModel() {
                 val obj = array.getJSONObject(i)
                 val item = MediaUploadState(
                     id = obj.optString("id", java.util.UUID.randomUUID().toString()),
-                    uri = android.net.Uri.parse(obj.getString("uri")),
+                    uri = Uri.parse(obj.getString("uri")),
                     mimeType = obj.optString("mimeType", null)
                 ).apply {
                     uploadedUrl = obj.optString("uploadedUrl", null).takeIf { it != "null" && it != "" }
@@ -1251,7 +1251,7 @@ class ProcessTextViewModel : ViewModel() {
                      val primaryUploadedUrl = item.uploadedUrl!!
                      
                      // Extract file extension from the primary URL
-                     val fileExtension = primaryUploadedUrl.substringAfterLast('.', "")
+                     primaryUploadedUrl.substringAfterLast('.', "")
                      val filename = primaryUploadedUrl.substringAfterLast('/')
 
                      // 1. Construct imeta tag
@@ -1398,14 +1398,18 @@ class ProcessTextViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val hexKey = pubkey ?: return@launch
-                val baseRelays = relayManager.fetchRelayList(hexKey)
+                val baseRelays = withContext(Dispatchers.IO) {
+                    relayManager.fetchRelayList(hexKey)
+                }
                 
                 val combinedRelays = mutableListOf<String>().apply { addAll(baseRelays) }
                 if (settingsRepository.isCitrineRelayEnabled()) {
                     combinedRelays.add("ws://localhost:4869")
                 }
                 
-                val results = relayManager.publishEvent(signedEventJson, combinedRelays.distinct())
+                val results = withContext(Dispatchers.IO) {
+                    relayManager.publishEvent(signedEventJson, combinedRelays.distinct())
+                }
                 val successCount = results.count { it.value }
                 if (successCount > 0) {
                     publishStatus = "Server list published to $successCount relays."

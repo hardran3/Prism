@@ -553,7 +553,7 @@ class ProcessTextActivity : ComponentActivity() {
                                 )
                             } else {
                                 Icon(
-                                    imageVector = androidx.compose.material.icons.Icons.Default.Person,
+                                    imageVector = Icons.Default.Person,
                                     contentDescription = "Login",
                                     modifier = Modifier.fillMaxSize().padding(8.dp)
                                 )
@@ -1016,7 +1016,7 @@ class ProcessTextActivity : ComponentActivity() {
 
                 // Media Row Carousel (Reverted to bottom)
                 if (vm.mediaItems.isNotEmpty()) {
-                    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                    androidx.compose.ui.platform.LocalHapticFeedback.current
 
                     androidx.compose.foundation.lazy.LazyRow(
                         modifier = Modifier
@@ -1187,9 +1187,9 @@ fun MediaDetailDialog(
     val enabledServersCount = vm.blossomServers.count { it.enabled }
     
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        androidx.compose.material3.Surface(
+        Surface(
             shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-            color = androidx.compose.material3.MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surface,
             tonalElevation = 8.dp
         ) {
             Column(
@@ -1263,16 +1263,16 @@ fun MediaDetailDialog(
                 }
 
                 // File Details
-                Text("File Details", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+                Text("File Details", style = MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 // Hash
                 if (item.hash != null) {
-                    Text("SHA-256 Hash:", style = androidx.compose.material3.MaterialTheme.typography.labelMedium)
+                    Text("SHA-256 Hash:", style = MaterialTheme.typography.labelMedium)
                     SelectionContainer {
                         Text(
                             item.hash!!,
-                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodySmall,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                         )
                     }
@@ -1284,24 +1284,24 @@ fun MediaDetailDialog(
                     val sizeKb = item.size / 1024
                     val sizeMb = sizeKb / 1024.0
                     val sizeText = if (sizeMb >= 1.0) String.format(java.util.Locale.US, "%.2f MB", sizeMb) else "$sizeKb KB"
-                    Text("File Size: $sizeText", style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
+                    Text("File Size: $sizeText", style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 
                 // MIME Type
                 if (item.mimeType != null) {
-                    Text("MIME Type: ${item.mimeType}", style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
+                    Text("MIME Type: ${item.mimeType}", style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 
                 // URL
                 if (item.uploadedUrl != null) {
-                    Text("URL:", style = androidx.compose.material3.MaterialTheme.typography.labelMedium)
+                    Text("URL:", style = MaterialTheme.typography.labelMedium)
                     SelectionContainer {
                         Text(
                             item.uploadedUrl!!,
-                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                            color = androidx.compose.material3.MaterialTheme.colorScheme.primary
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                     Spacer(modifier = Modifier.height(16.dp))
@@ -1364,7 +1364,7 @@ fun MediaDetailDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Server Upload Status", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
+                        Text("Server Upload Status", style = MaterialTheme.typography.titleMedium)
                         
                         val hasFailures = itemResults.any { !it.second }
                         if (hasFailures && !item.isUploading) {
@@ -1407,19 +1407,19 @@ fun MediaDetailDialog(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     server,
-                                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.weight(1f),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 if (success && item.uploadedUrl != null) {
-                                    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+                                    val clipboardManager = LocalClipboardManager.current
                                     IconButton(
                                         onClick = {
                                             if (vm.isHapticEnabled()) {
                                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                             }
-                                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(item.uploadedUrl!!))
+                                            clipboardManager.setText(AnnotatedString(item.uploadedUrl!!))
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
@@ -1435,13 +1435,13 @@ fun MediaDetailDialog(
                                 ) {
                                     Text(
                                         "Hash: ${serverHash.take(12)}...",
-                                        style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                                        style = MaterialTheme.typography.labelSmall,
                                         color = if (hashMatch) Color(0xFF4CAF50) else Color(0xFFFF9800)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         if (hashMatch) "✓ Match" else "⚠ Different",
-                                        style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                                        style = MaterialTheme.typography.labelSmall,
                                         color = if (hashMatch) Color(0xFF4CAF50) else Color(0xFFFF9800)
                                     )
                                 }
@@ -1493,7 +1493,7 @@ fun MediaThumbnail(
     onRemove: () -> Unit
 ) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val clipboardManager = LocalClipboardManager.current
     
     Box(
         modifier = Modifier
@@ -1505,7 +1505,7 @@ fun MediaThumbnail(
                 onLongClick = {
                     item.uploadedUrl?.let { url ->
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(url))
+                        clipboardManager.setText(AnnotatedString(url))
                     }
                 }
             )
@@ -1538,7 +1538,9 @@ fun MediaThumbnail(
         } else if (item.uploadedUrl != null) {
             // Success indicator
             Box(
-                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).size(20.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0xFF4CAF50)),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).size(20.dp).clip(
+                    CircleShape
+                ).background(Color(0xFF4CAF50)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(14.dp))
@@ -1551,7 +1553,9 @@ fun MediaThumbnail(
                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                 onRemove()
             },
-            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp).background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
+            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp).background(Color.Black.copy(alpha = 0.5f),
+                CircleShape
+            )
         ) {
             Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(14.dp))
         }
@@ -1569,9 +1573,9 @@ fun SharingDialog(
     val enabledServersCount = vm.blossomServers.count { it.enabled }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        androidx.compose.material3.Surface(
+        Surface(
             shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-            color = androidx.compose.material3.MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surface,
             tonalElevation = 8.dp
         ) {
             Column(
@@ -1615,7 +1619,7 @@ fun SharingDialog(
                                         .align(Alignment.BottomEnd)
                                         .padding(4.dp)
                                         .size(20.dp)
-                                        .clip(androidx.compose.foundation.shape.CircleShape)
+                                        .clip(CircleShape)
                                         .background(Color(0xFF4CAF50)),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -1667,7 +1671,7 @@ fun SharingDialog(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                androidx.compose.material3.HorizontalDivider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Server Selection
@@ -1846,7 +1850,7 @@ class NpubVisualTransformation(
             val username = pubkey?.let { usernameCache[it]?.name }
             
             val label = if (username != null) "@$username" else match
-            val startOffset = builder.length
+            builder.length
             builder.withStyle(SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) {
                 append(label)
             }

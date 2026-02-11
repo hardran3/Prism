@@ -7,6 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import android.widget.Toast
 import android.content.Intent
+import com.ryans.nostrshare.BuildConfig
 import com.ryans.nostrshare.nip55.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -342,7 +343,7 @@ fun NostrSettingsTab(repo: SettingsRepository) {
 fun SchedulerLogDialog(onDismiss: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var logs by remember { mutableStateOf("") }
-    val coroutineScope = rememberCoroutineScope()
+    rememberCoroutineScope()
     
     LaunchedEffect(Unit) {
         logs = com.ryans.nostrshare.utils.SchedulerLog.getLogs(context)
@@ -396,7 +397,7 @@ fun BlossomSettingsTab(
     var showPublishConfirm by remember { mutableStateOf(false) }
     
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    val coroutineScope = rememberCoroutineScope()
+    rememberCoroutineScope()
 
     Column(modifier = Modifier.fillMaxSize()) {
         if (viewModel.isPublishing) {
@@ -675,7 +676,7 @@ fun AboutSettingsTab(repo: SettingsRepository) {
             color = MaterialTheme.colorScheme.onSurface
         )
         Text(
-            text = "Version 1.0.3",
+            text = "Version ${BuildConfig.VERSION_NAME}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
