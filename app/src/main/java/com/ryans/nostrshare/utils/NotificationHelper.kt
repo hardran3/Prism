@@ -18,18 +18,16 @@ object NotificationHelper {
     const val NOTIFICATION_ID_SCHEDULED_STATUS = 1001
 
     fun createNotificationChannel(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "Prism Scheduler"
-            val descriptionText = "Notifications for pending scheduled posts"
-            val importance = NotificationManager.IMPORTANCE_LOW 
-            val channel = NotificationChannel(CHANNEL_ID_SCHEDULE, name, importance).apply {
-                description = descriptionText
-                setShowBadge(false)
-            }
-            val notificationManager: NotificationManager =
-                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
+        val name = "Prism Scheduler"
+        val descriptionText = "Notifications for pending scheduled posts"
+        val importance = NotificationManager.IMPORTANCE_LOW 
+        val channel = NotificationChannel(CHANNEL_ID_SCHEDULE, name, importance).apply {
+            description = descriptionText
+            setShowBadge(false)
         }
+        val notificationManager: NotificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
     }
 
     fun updateScheduledNotification(context: Context) {

@@ -54,10 +54,8 @@ object SchedulerUtils {
                 } else {
                     alarmManager.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, scheduledAt, pendingIntent)
                 }
-            } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, scheduledAt, pendingIntent)
             } else {
-                alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, scheduledAt, pendingIntent)
+                alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, scheduledAt, pendingIntent)
             }
             SchedulerLog.log(context, "SchedulerUtils", "Enqueued draft ${draft.id} for $scheduledAt")
         } catch (e: Exception) {
