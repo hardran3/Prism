@@ -200,7 +200,7 @@ class BlossomClient(private val client: OkHttpClient) {
             val response = client.newCall(request).execute()
             if (response.isSuccessful) return@withContext true
             response.close()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Fallback
         }
 

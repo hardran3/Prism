@@ -7,7 +7,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import android.widget.Toast
 import android.content.Intent
-import com.ryans.nostrshare.BuildConfig
 import com.ryans.nostrshare.nip55.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
