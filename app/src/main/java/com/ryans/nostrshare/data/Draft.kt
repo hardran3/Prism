@@ -15,6 +15,7 @@ data class Draft(
     val highlightKind: Int? = null,
     val highlightIdentifier: String? = null,
     val highlightRelaysJson: String? = null, // Serialized List<String>
+    val originalEventJson: String? = null,
     val lastEdited: Long = System.currentTimeMillis(),
     val pubkey: String? = null,
     val scheduledAt: Long? = null,

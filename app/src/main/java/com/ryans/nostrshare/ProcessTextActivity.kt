@@ -18,6 +18,8 @@ import com.ryans.nostrshare.ui.theme.NostrShareTheme
 import com.ryans.nostrshare.ui.DraftsDialog
 import com.ryans.nostrshare.data.Draft
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Person
@@ -34,6 +36,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
@@ -468,11 +472,12 @@ class ProcessTextActivity : ComponentActivity() {
 
 
 
-    @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+    @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
     @Composable
     fun ShareScreen(vm: ProcessTextViewModel) {
         val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+        val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
         var showActionOptions by remember { mutableStateOf(false) }
         
         // Auto-save Draft
@@ -488,6 +493,7 @@ class ProcessTextActivity : ComponentActivity() {
         var showDraftsDialog by remember { mutableStateOf(false) }
         var showDatePicker by remember { mutableStateOf(false) }
         var showTimePicker by remember { mutableStateOf(false) }
+        var showQuickScheduleOptions by remember { mutableStateOf(false) }
         var tempDateMillis by remember { mutableStateOf<Long?>(null) }
 
         // Auto-focus
@@ -580,7 +586,11 @@ class ProcessTextActivity : ComponentActivity() {
                             }
                             Icon(Icons.Filled.ArrowDropDown, "Select Mode")
                             
-                            DropdownMenu(expanded = showModeMenu, onDismissRequest = { showModeMenu = false }) {
+                            DropdownMenu(
+                                expanded = showModeMenu, 
+                                onDismissRequest = { showModeMenu = false },
+                                properties = PopupProperties(focusable = false)
+                            ) {
                                 vm.availableKinds.forEach { kind ->
                                     DropdownMenuItem(
                                         text = { Text(kind.label) },
@@ -668,7 +678,11 @@ class ProcessTextActivity : ComponentActivity() {
                         }
                     }
                 } else {
-                    val canPost = vm.quoteContent.isNotBlank() || vm.mediaItems.isNotEmpty() || vm.sourceUrl.isNotBlank()
+                    val canPost = if (vm.postKind == ProcessTextViewModel.PostKind.REPOST) {
+                        vm.sourceUrl.isNotBlank()
+                    } else {
+                        vm.quoteContent.isNotBlank() || vm.mediaItems.isNotEmpty() || vm.sourceUrl.isNotBlank()
+                    }
                     
                     BottomAppBar(
                         actions = {
@@ -772,6 +786,7 @@ class ProcessTextActivity : ComponentActivity() {
                                                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                                 }
                                                 showActionOptions = false 
+                                                showQuickScheduleOptions = false
                                             },
                                             containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                             contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -785,27 +800,94 @@ class ProcessTextActivity : ComponentActivity() {
                                         Spacer(modifier = Modifier.width(8.dp))
                                     }
 
-                                    // Schedule
+                                    // Quick Schedule (Clock)
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = showActionOptions,
                                         enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
                                         exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End)
                                     ) {
-                                        FloatingActionButton(
-                                            onClick = {
-                                                if (vm.isHapticEnabled()) {
-                                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        Box(contentAlignment = Alignment.BottomCenter) {
+                                            // Presets Menu (Using Popup to render above the bar)
+                                            if (showQuickScheduleOptions) {
+                                                Popup(
+                                                    alignment = Alignment.BottomCenter,
+                                                    offset = androidx.compose.ui.unit.IntOffset(0, -160), // Position above FAB
+                                                    onDismissRequest = { showQuickScheduleOptions = false },
+                                                    properties = PopupProperties(focusable = false)
+                                                ) {
+                                                    Surface(
+                                                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                                        tonalElevation = 8.dp,
+                                                        shadowElevation = 4.dp,
+                                                        modifier = Modifier.width(80.dp)
+                                                    ) {
+                                                        Column(modifier = Modifier.padding(4.dp)) {
+                                                            // Standard Picker Option at Top
+                                                            TextButton(
+                                                                onClick = {
+                                                                    if (vm.isHapticEnabled()) {
+                                                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                                    }
+                                                                    showQuickScheduleOptions = false
+                                                                    showActionOptions = false
+                                                                    showDatePicker = true
+                                                                },
+                                                                modifier = Modifier.fillMaxWidth()
+                                                            ) {
+                                                                Icon(Icons.Default.CalendarMonth, null, modifier = Modifier.size(20.dp))
+                                                            }
+
+                                                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                                            listOf(24, 12, 6, 3, 1).forEach { hours ->
+                                                                TextButton(
+                                                                    onClick = {
+                                                                        if (vm.isHapticEnabled()) {
+                                                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                                        }
+                                                                        val scheduledTime = System.currentTimeMillis() + (hours * 3600 * 1000L)
+                                                                        showQuickScheduleOptions = false
+                                                                        showActionOptions = false
+                                                                        
+                                                                        // Handle Notification Permission (Android 13+)
+                                                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                                                            val permission = android.Manifest.permission.POST_NOTIFICATIONS
+                                                                            if (androidx.core.content.ContextCompat.checkSelfPermission(this@ProcessTextActivity, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                                                                                checkExactAlarmAndSchedule(scheduledTime)
+                                                                            } else {
+                                                                                pendingScheduledTime = scheduledTime
+                                                                                requestPermissionLauncher.launch(permission)
+                                                                            }
+                                                                        } else {
+                                                                            checkExactAlarmAndSchedule(scheduledTime)
+                                                                        }
+                                                                    },
+                                                                    modifier = Modifier.fillMaxWidth()
+                                                                ) {
+                                                                    Text("${hours}h", style = MaterialTheme.typography.labelLarge)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
-                                                if (canPost) {
-                                                    showActionOptions = false
-                                                    showDatePicker = true
-                                                }
-                                            },
-                                            containerColor = if (canPost) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                            contentColor = if (canPost) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                                            modifier = Modifier.size(48.dp)
-                                        ) {
-                                            Icon(Icons.Default.Schedule, contentDescription = "Schedule", modifier = Modifier.size(20.dp))
+                                            }
+
+                                            FloatingActionButton(
+                                                onClick = {
+                                                    if (vm.isHapticEnabled()) {
+                                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                    }
+                                                    if (canPost) {
+                                                        showQuickScheduleOptions = !showQuickScheduleOptions
+                                                    }
+                                                },
+                                                containerColor = if (canPost) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                contentColor = if (canPost) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                                                modifier = Modifier.size(48.dp)
+                                            ) {
+                                                Icon(Icons.Default.AccessTime, contentDescription = "Quick Schedule", modifier = Modifier.size(20.dp))
+                                            }
                                         }
                                     }
 
@@ -1001,10 +1083,14 @@ class ProcessTextActivity : ComponentActivity() {
                 // URL Field - visible if Highlight or if URL is present
                 // Source URL Input - Hide for Kind 1 (Note)
                 if (vm.postKind != ProcessTextViewModel.PostKind.NOTE) {
+                    val isNostrEvent = remember(vm.sourceUrl) {
+                        val entity = NostrUtils.findNostrEntity(vm.sourceUrl)
+                        entity != null && entity.type != "npub" && entity.type != "nprofile"
+                    }
                     OutlinedTextField(
                         value = vm.sourceUrl,
                         onValueChange = { vm.updateSource(it) },
-                        label = { Text("Source URL") },
+                        label = { Text(if (isNostrEvent) "Source Event" else "Source URL") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 8.dp),

@@ -16,11 +16,17 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material.icons.filled.Person
+import coil.compose.AsyncImage
 import com.ryans.nostrshare.ProcessTextViewModel
 import com.ryans.nostrshare.data.Draft
 import java.text.SimpleDateFormat
@@ -31,9 +37,9 @@ fun DraftsDialog(
     vm: ProcessTextViewModel,
     onDismiss: () -> Unit
 ) {
-    val drafts by vm.drafts.collectAsState(initial = emptyList())
-    val allScheduled by vm.allScheduled.collectAsState(initial = emptyList())
-    val scheduledHistory by vm.scheduledHistory.collectAsState(initial = emptyList())
+    val drafts by vm.drafts.collectAsState(initial = emptyList<Draft>())
+    val allScheduled by vm.allScheduled.collectAsState(initial = emptyList<Draft>())
+    val scheduledHistory by vm.scheduledHistory.collectAsState(initial = emptyList<Draft>())
     var selectedTab by remember { mutableIntStateOf(0) }
 
     androidx.compose.ui.window.Dialog(
@@ -84,11 +90,12 @@ fun DraftsDialog(
                     }, onDelete = {
                         vm.deleteDraft(it.id)
                     })
-                    1 -> ScheduledList(allScheduled, onCancel = {
+                    1 -> ScheduledList(allScheduled, vm = vm, onCancel = {
                         vm.cancelScheduledNote(it)
                     })
                     2 -> HistoryList(
                         history = scheduledHistory,
+                        vm = vm,
                         onClearHistory = { vm.clearScheduledHistory() }
                     )
                 }
@@ -113,12 +120,13 @@ fun DraftList(drafts: List<Draft>, onSelect: (Draft) -> Unit, onDelete: (Draft) 
 }
 
 @Composable
-fun getKindLabel(kind: Int): String {
-    return when (kind) {
+fun getKindLabel(draft: Draft): String {
+    return when (draft.kind) {
         1 -> "Text Note"
         9802 -> "Highlight"
+        6 -> if (draft.content.isBlank()) "Repost" else "Quote Post"
         0, 20, 22, 1063 -> "Media Note"
-        else -> "Kind $kind"
+        else -> "Kind ${draft.kind}"
     }
 }
 
@@ -132,7 +140,7 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(getKindLabel(draft.kind), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text(getKindLabel(draft), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 Text(date, style = MaterialTheme.typography.labelSmall)
             }
             Spacer(Modifier.height(4.dp))
@@ -157,6 +165,7 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
 @Composable
 fun ScheduledList(
     pending: List<Draft>,
+    vm: ProcessTextViewModel,
     onCancel: (Draft) -> Unit
 ) {
     if (pending.isEmpty()) {
@@ -166,7 +175,7 @@ fun ScheduledList(
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
             items(pending) { note ->
-                ScheduledItem(note, onCancel)
+                ScheduledItem(note, vm, onCancel)
             }
         }
     }
@@ -175,6 +184,7 @@ fun ScheduledList(
 @Composable
 fun HistoryList(
     history: List<Draft>,
+    vm: ProcessTextViewModel,
     onClearHistory: () -> Unit
 ) {
     if (history.isEmpty()) {
@@ -195,7 +205,7 @@ fun HistoryList(
             }
             LazyColumn(Modifier.weight(1f)) {
                 items(history) { note ->
-                    ScheduledItem(note, {})
+                    ScheduledItem(note, vm, {})
                 }
             }
         }
@@ -203,11 +213,22 @@ fun HistoryList(
 }
 
 @Composable
-fun ScheduledItem(note: Draft, onCancel: (Draft) -> Unit) {
+fun ScheduledItem(note: Draft, vm: ProcessTextViewModel, onCancel: (Draft) -> Unit) {
     val date = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(note.scheduledAt ?: 0L))
     val isCompleted = note.isCompleted
     val isSuccess = isCompleted && note.publishError == null
     
+    val profile = note.pubkey?.let { vm.usernameCache[it] }
+    
+    // Resolve profile if missing and pubkey exists
+    LaunchedEffect(note.pubkey) {
+        note.pubkey?.let { pk ->
+            if (vm.usernameCache[pk]?.name == null) {
+                vm.resolveUsername(pk)
+            }
+        }
+    }
+
     // Adaptive colors: Use tokens from MaterialTheme.colorScheme for theme awareness
     val containerColor = when {
         isSuccess -> {
@@ -229,57 +250,93 @@ fun ScheduledItem(note: Draft, onCancel: (Draft) -> Unit) {
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
-        Column(Modifier.padding(12.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        if (isCompleted) {
-                            if (isSuccess) Icons.Default.Check
-                            else Icons.Default.Warning
-                        } else Icons.Default.Schedule,
-                        null,
-                        modifier = Modifier.size(16.dp),
-                        tint = statusColor
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            // User Avatar
+            Box(modifier = Modifier.size(40.dp).padding(top = 4.dp)) {
+                if (profile?.pictureUrl != null) {
+                    AsyncImage(
+                        model = profile.pictureUrl,
+                        contentDescription = "User Avatar",
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        contentScale = ContentScale.Crop
                     )
-                    Spacer(Modifier.width(4.dp))
-                    Text(date, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = "User Avatar",
+                        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant, CircleShape).padding(8.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-                Text(getKindLabel(note.kind), style = MaterialTheme.typography.labelSmall)
             }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = note.content.ifBlank { "[No text content]" },
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium
-            )
             
-            if (isCompleted && note.publishError != null) {
-                Text(
-                    text = "Error: ${note.publishError}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            if (!isCompleted) {
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                    TextButton(onClick = { onCancel(note) }) {
-                        Icon(Icons.Default.Delete, null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(12.dp))
+            
+            Column(Modifier.weight(1f)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (isCompleted) {
+                                if (isSuccess) Icons.Default.Check
+                                else Icons.Default.Warning
+                            } else Icons.Default.Schedule,
+                            null,
+                            modifier = Modifier.size(16.dp),
+                            tint = statusColor
+                        )
                         Spacer(Modifier.width(4.dp))
-                        Text("Cancel", style = MaterialTheme.typography.labelMedium)
+                        Text(date, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     }
+                    Text(getKindLabel(note), style = MaterialTheme.typography.labelSmall)
                 }
-            } else {
-                Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.CenterEnd) {
+                
+                profile?.name?.let {
                     Text(
-                        if (isSuccess) "Sent" else "Failed",
+                        text = it,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                        color = statusColor
+                        color = MaterialTheme.colorScheme.primary
                     )
+                }
+
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = note.content.ifBlank { "[No text content]" },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                if (isCompleted && note.publishError != null) {
+                    Text(
+                        text = "Error: ${note.publishError}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (!isCompleted) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                        TextButton(onClick = { onCancel(note) }) {
+                            Icon(Icons.Default.Delete, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Cancel", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                } else {
+                    Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.CenterEnd) {
+                        Text(
+                            if (isSuccess) "Sent" else "Failed",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = statusColor
+                        )
+                    }
                 }
             }
         }

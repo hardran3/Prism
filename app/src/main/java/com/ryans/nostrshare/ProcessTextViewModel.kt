@@ -15,6 +15,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import androidx.compose.runtime.snapshotFlow
 import android.net.Uri
 import java.io.File
 import org.json.JSONObject
@@ -45,6 +48,8 @@ class ProcessTextViewModel : ViewModel() {
     var highlightKind by mutableStateOf<Int?>(null)
     var highlightIdentifier by mutableStateOf<String?>(null)
     var highlightRelays = mutableStateListOf<String>()
+    var originalEventJson by mutableStateOf<String?>(null)
+    private var savedContentBuffer by mutableStateOf("")
     
     // Onboarding State
     var isOnboarded by mutableStateOf(false)
@@ -73,9 +78,24 @@ class ProcessTextViewModel : ViewModel() {
     private val relayManager by lazy { RelayManager(NostrShareApp.getInstance().client, settingsRepository) }
     private val draftDao by lazy { NostrShareApp.getInstance().database.draftDao() }
 
-    val drafts = draftDao.getAllDrafts()
-    val allScheduled = draftDao.getAllScheduled()
-    val scheduledHistory = draftDao.getScheduledHistory()
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val drafts = snapshotFlow { pubkey }
+        .flatMapLatest { pk ->
+            draftDao.getAllDrafts(pk)
+        }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val allScheduled = snapshotFlow { pubkey }
+        .flatMapLatest { pk ->
+            draftDao.getAllScheduled(pk)
+        }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val scheduledHistory = snapshotFlow { pubkey }
+        .flatMapLatest { pk ->
+            draftDao.getScheduledHistory(pk)
+        }
+
     var isUploading by mutableStateOf(false)
     var isDeleting by mutableStateOf(false)
     var uploadStatus by mutableStateOf("")
@@ -287,6 +307,7 @@ class ProcessTextViewModel : ViewModel() {
                         }
                         
                         if (event != null) {
+                            originalEventJson = event.toString()
                             if (entity.type == "naddr") {
                                 val tags = event.optJSONArray("tags")
                                 var title: String? = null
@@ -325,6 +346,11 @@ class ProcessTextViewModel : ViewModel() {
                                 
                                 // If author was in entity but not in event (unlikely if fetch worked), use it as fallback
                                 if (highlightAuthor == null) highlightAuthor = entity.author
+
+                                // Add Repost option
+                                if (!availableKinds.contains(PostKind.REPOST)) {
+                                    availableKinds = availableKinds + PostKind.REPOST
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -907,6 +933,7 @@ class ProcessTextViewModel : ViewModel() {
     enum class PostKind(val kind: Int, val label: String) {
         NOTE(1, "Note"), 
         HIGHLIGHT(9802, "Highlight"),
+        REPOST(6, "Repost"),
         MEDIA(0, "Media"), // Kind will be determined dynamically (20 or 22)
         FILE_METADATA(1063, "File Meta")
     }
@@ -935,7 +962,7 @@ class ProcessTextViewModel : ViewModel() {
         currentDraftId = null
         
         viewModelScope.launch {
-            draftDao.deleteAutoSaveDraft()
+            draftDao.deleteAutoSaveDraft(pubkey)
             if (draftIdToDelete != null) {
                 draftDao.deleteById(draftIdToDelete)
             }
@@ -946,7 +973,7 @@ class ProcessTextViewModel : ViewModel() {
         
         // Don't save if empty
         if (quoteContent.isBlank() && sourceUrl.isBlank() && mediaItems.isEmpty()) {
-             viewModelScope.launch { draftDao.deleteAutoSaveDraft() }
+             viewModelScope.launch { draftDao.deleteAutoSaveDraft(pubkey) }
              return
         }
 
@@ -968,11 +995,13 @@ class ProcessTextViewModel : ViewModel() {
                 highlightKind = highlightKind,
                 highlightIdentifier = highlightIdentifier,
                 highlightRelaysJson = highlightRelaysJson,
+                originalEventJson = originalEventJson,
+                pubkey = pubkey,
                 isAutoSave = true
             )
             // Use a specific ID if we want to update the SAME auto-save slot
             // Actually insertDraft with REPLACE is fine if we manage the ID or just delete old one
-            draftDao.deleteAutoSaveDraft()
+            draftDao.deleteAutoSaveDraft(pubkey)
             draftDao.insertDraft(draft)
         }
     }
@@ -997,6 +1026,8 @@ class ProcessTextViewModel : ViewModel() {
                 highlightKind = highlightKind,
                 highlightIdentifier = highlightIdentifier,
                 highlightRelaysJson = highlightRelaysJson,
+                originalEventJson = originalEventJson,
+                pubkey = pubkey,
                 isAutoSave = false
             )
             val newId = draftDao.insertDraft(draft)
@@ -1011,7 +1042,7 @@ class ProcessTextViewModel : ViewModel() {
         val draftIdToDelete = currentDraftId
         currentDraftId = null
         viewModelScope.launch {
-            draftDao.deleteAutoSaveDraft()
+            draftDao.deleteAutoSaveDraft(pubkey)
             if (draftIdToDelete != null) {
                 draftDao.deleteById(draftIdToDelete)
             }
@@ -1026,7 +1057,7 @@ class ProcessTextViewModel : ViewModel() {
 
     fun checkDraft() {
         viewModelScope.launch {
-            val autoDraft = draftDao.getAutoSaveDraft()
+            val autoDraft = draftDao.getAutoSaveDraft(pubkey)
             if (autoDraft != null) {
                 // Determine if we should show prompt
                 // Only if CURRENT content is empty
@@ -1039,7 +1070,7 @@ class ProcessTextViewModel : ViewModel() {
 
     fun applyDraft() {
         viewModelScope.launch {
-            val autoDraft = draftDao.getAutoSaveDraft()
+            val autoDraft = draftDao.getAutoSaveDraft(pubkey)
             autoDraft?.let { loadDraft(it) }
             showDraftPrompt = false
         }
@@ -1055,6 +1086,7 @@ class ProcessTextViewModel : ViewModel() {
         highlightAuthor = draft.highlightAuthor
         highlightKind = draft.highlightKind
         highlightIdentifier = draft.highlightIdentifier
+        originalEventJson = draft.originalEventJson
         try {
             draft.highlightRelaysJson?.let { jsonString ->
                 if (jsonString.isNotEmpty()) {
@@ -1074,7 +1106,12 @@ class ProcessTextViewModel : ViewModel() {
         }
         
         // Use PostKind values for restoration to avoid being limited by current session's availableKinds
-        postKind = PostKind.values().find { it.kind == draft.kind } ?: PostKind.NOTE
+        val loadedKind = PostKind.values().find { it.kind == draft.kind } ?: PostKind.NOTE
+        postKind = loadedKind
+        
+        if (loadedKind == PostKind.REPOST && !availableKinds.contains(PostKind.REPOST)) {
+            availableKinds = availableKinds + PostKind.REPOST
+        }
         
         // Deserialize media
         deserializeMediaItems(draft.mediaJson)
@@ -1118,6 +1155,15 @@ class ProcessTextViewModel : ViewModel() {
         val oldKind = postKind
         postKind = kind
         
+        if (kind == PostKind.REPOST) {
+            // Save current work and clear for Repost/Quote
+            savedContentBuffer = quoteContent
+            quoteContent = ""
+        } else if (oldKind == PostKind.REPOST) {
+            // Restore saved work when leaving Repost/Quote
+            quoteContent = savedContentBuffer
+        }
+
         val sUrl = sourceUrl
         
         // 1. Cleanup Phase: If leaving NOTE, remove auto-added URLs
@@ -1202,6 +1248,42 @@ class ProcessTextViewModel : ViewModel() {
                  }
                  
                  event.put("content", content)
+                 event.put("tags", tags)
+             }
+             PostKind.REPOST -> {
+                 if (quoteContent.isBlank()) {
+                     // NIP-18 Repost
+                     val kind = if (highlightKind == 1) 6 else 16
+                     event.put("kind", kind)
+                     event.put("content", originalEventJson ?: "")
+                     
+                     // Tags e and p
+                     if (highlightEventId != null) {
+                         tags.put(org.json.JSONArray().put("e").put(highlightEventId).put(highlightRelays.firstOrNull() ?: ""))
+                     }
+                     if (highlightAuthor != null) {
+                         tags.put(org.json.JSONArray().put("p").put(highlightAuthor))
+                     }
+                     if (highlightKind != null) {
+                         tags.put(org.json.JSONArray().put("k").put(highlightKind.toString()))
+                     }
+                 } else {
+                     // Quote Post
+                     event.put("kind", 1)
+                     var content = quoteContent.trim()
+                     if (sourceUrl.isNotBlank() && !content.contains(sourceUrl)) {
+                         content += "\n\n$sourceUrl"
+                     }
+                     event.put("content", content)
+                     
+                     // Optional: Add q tag for better client support
+                     if (highlightEventId != null) {
+                         val qTag = org.json.JSONArray().put("q").put(highlightEventId)
+                         highlightRelays.firstOrNull()?.let { qTag.put(it) }
+                         highlightAuthor?.let { qTag.put(it) }
+                         tags.put(qTag)
+                     }
+                 }
                  event.put("tags", tags)
              }
              PostKind.HIGHLIGHT -> {
