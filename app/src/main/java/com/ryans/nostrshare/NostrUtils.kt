@@ -46,6 +46,14 @@ object NostrUtils {
         }
     }
 
+    fun eventIdToNote(eventId: String): String {
+        return try {
+            Bech32.encode("note", eventId.hexToBytes())
+        } catch (e: Exception) {
+            eventId
+        }
+    }
+
     fun pubkeyToNprofile(pubkey: String): String {
         return try {
             val bytes = pubkey.hexToBytes()
@@ -64,6 +72,16 @@ object NostrUtils {
             Bech32.encode("nprofile", tlv.toByteArray())
         } catch (e: Exception) {
             pubkey
+        }
+    }
+
+    fun getKindLabel(kind: Int, content: String = ""): String {
+        return when (kind) {
+            1 -> "Text Note"
+            9802 -> "Highlight"
+            6 -> if (content.isBlank()) "Repost" else "Quote Post"
+            0, 20, 22, 1063 -> "Media Note"
+            else -> "Kind $kind"
         }
     }
 

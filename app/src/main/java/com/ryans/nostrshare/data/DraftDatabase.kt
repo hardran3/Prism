@@ -3,7 +3,7 @@ package com.ryans.nostrshare.data
 import android.content.Context
 import androidx.room.*
 
-@Database(entities = [Draft::class], version = 5, exportSchema = false)
+@Database(entities = [Draft::class], version = 6, exportSchema = false)
 abstract class DraftDatabase : RoomDatabase() {
     abstract fun draftDao(): DraftDao
 
@@ -17,7 +17,7 @@ abstract class DraftDatabase : RoomDatabase() {
                     context.applicationContext,
                     DraftDatabase::class.java,
                     "prism_database"
-                ).fallbackToDestructiveMigration().build()
+                ).fallbackToDestructiveMigration(false).build()
                 INSTANCE = instance
                 instance
             }

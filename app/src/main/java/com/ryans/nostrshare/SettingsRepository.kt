@@ -107,9 +107,9 @@ class SettingsRepository(private val appContext: Context) {
                 val key = keys.next()
                 val profileJson = obj.getJSONObject(key)
                 result[key] = UserProfile(
-                    name = profileJson.optString("name", null),
-                    pictureUrl = profileJson.optString("picture", null),
-                    lud16 = profileJson.optString("lud16", null)
+                    name = if (profileJson.isNull("name")) null else profileJson.optString("name"),
+                    pictureUrl = if (profileJson.isNull("picture")) null else profileJson.optString("picture"),
+                    lud16 = if (profileJson.isNull("lud16")) null else profileJson.optString("lud16")
                 )
             }
         } catch (_: Exception) {}

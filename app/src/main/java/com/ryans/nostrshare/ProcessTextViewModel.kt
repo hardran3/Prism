@@ -1115,6 +1115,11 @@ class ProcessTextViewModel : ViewModel() {
         
         // Deserialize media
         deserializeMediaItems(draft.mediaJson)
+        
+        // Also populate processedMediaUris map so editor shows thumbnails
+        mediaItems.forEach { item ->
+            processedMediaUris[item.id] = item.uri
+        }
     }
 
     private fun serializeMediaItems(items: List<MediaUploadState>): String {
@@ -1122,9 +1127,9 @@ class ProcessTextViewModel : ViewModel() {
         items.forEach { item ->
             val obj = JSONObject()
             obj.put("uri", item.uri.toString())
-            obj.put("uploadedUrl", item.uploadedUrl)
-            obj.put("mimeType", item.mimeType)
-            obj.put("hash", item.hash)
+            obj.putOpt("uploadedUrl", item.uploadedUrl)
+            obj.putOpt("mimeType", item.mimeType)
+            obj.putOpt("hash", item.hash)
             obj.put("size", item.size)
             array.put(obj)
         }
@@ -1140,10 +1145,10 @@ class ProcessTextViewModel : ViewModel() {
                 val item = MediaUploadState(
                     id = obj.optString("id", java.util.UUID.randomUUID().toString()),
                     uri = Uri.parse(obj.getString("uri")),
-                    mimeType = obj.optString("mimeType", null)
+                    mimeType = obj.optString("mimeType").takeIf { it.isNotEmpty() }
                 ).apply {
-                    uploadedUrl = obj.optString("uploadedUrl", null).takeIf { it != "null" && it != "" }
-                    hash = obj.optString("hash", null).takeIf { it != "null" && it != "" }
+                    uploadedUrl = obj.optString("uploadedUrl").takeIf { it != "null" && it.isNotEmpty() }
+                    hash = obj.optString("hash").takeIf { it != "null" && it.isNotEmpty() }
                     size = obj.optLong("size", 0L)
                 }
                 mediaItems.add(item)
@@ -1396,7 +1401,7 @@ class ProcessTextViewModel : ViewModel() {
             event.put("content", quoteContent.trim()) // Optional description
             
             val tags = org.json.JSONArray()
-            tags.put(org.json.JSONArray().put("url").put(item.uploadedUrl))
+            tags.put(org.json.JSONArray().put("url").put(item.uploadedUrl!!))
             item.mimeType?.let { tags.put(org.json.JSONArray().put("m").put(it)) }
             item.hash?.let { tags.put(org.json.JSONArray().put("x").put(it)) }
             item.size.takeIf { it > 0 }?.let { tags.put(org.json.JSONArray().put("size").put(it.toString())) }

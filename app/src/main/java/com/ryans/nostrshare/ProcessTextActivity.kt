@@ -23,7 +23,7 @@ import androidx.compose.ui.window.PopupProperties
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ExpandLess
@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.OffsetMapping
+import android.net.Uri
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontStyle
@@ -304,7 +305,7 @@ class ProcessTextActivity : ComponentActivity() {
             verticalArrangement = Arrangement.Center
         ) {
             Icon(
-                painter = painterResource(id = R.drawable.ic_prism),
+                painter = painterResource(id = R.drawable.ic_prism_triangle),
                 contentDescription = null,
                 modifier = Modifier.size(100.dp).clip(CircleShape),
                 tint = Color.Unspecified
@@ -970,7 +971,7 @@ class ProcessTextActivity : ComponentActivity() {
                                         contentColor = if (canPost) Color(0xFF1B5E20) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
                                         modifier = Modifier.padding(end = 16.dp).size(48.dp)
                                     ) {
-                                        Icon(Icons.Default.Send, contentDescription = "Publish", modifier = Modifier.size(20.dp))
+                                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Publish", modifier = Modifier.size(20.dp))
                                     }
                                 }
                             }
@@ -1041,7 +1042,31 @@ class ProcessTextActivity : ComponentActivity() {
                 if (showDraftsDialog) {
                     DraftsDialog(
                         vm = vm,
-                        onDismiss = { showDraftsDialog = false }
+                        onDismiss = { showDraftsDialog = false },
+                        onEditAndReschedule = { draftToEdit ->
+                            vm.loadDraft(draftToEdit)
+                            vm.currentDraftId = draftToEdit.id
+                            showDraftsDialog = false
+                            Toast.makeText(this@ProcessTextActivity, "Loaded for editing. Reschedule to replace.", Toast.LENGTH_LONG).show()
+                        },
+                        onSaveToDrafts = { draftToSave ->
+                            vm.cancelScheduledNote(draftToSave)
+                            vm.currentDraftId = null
+                            vm.loadDraft(draftToSave.copy(isScheduled = false, scheduledAt = null, signedJson = null, isAutoSave = false))
+                            vm.saveManualDraft()
+                            // showDraftsDialog remains open or closes? User said "same as editor", so maybe close.
+                            showDraftsDialog = false
+                            Toast.makeText(this@ProcessTextActivity, "Moved to drafts.", Toast.LENGTH_LONG).show()
+                        },
+                        onOpenInClient = { eventId ->
+                            val noteId = NostrUtils.eventIdToNote(eventId)
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("nostr:$noteId"))
+                            try {
+                                startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(this@ProcessTextActivity, "No Nostr client found.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     )
                 }
 
@@ -1598,8 +1623,9 @@ fun MediaThumbnail(
     ) {
         // Thumbnail Image or Video Icon
         if (item.mimeType?.startsWith("image/") == true) {
+            val model = item.uploadedUrl ?: item.uri
             coil.compose.AsyncImage(
-                model = item.uri,
+                model = model,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = androidx.compose.ui.layout.ContentScale.Crop
@@ -1805,7 +1831,7 @@ fun SharingDialog(
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(if (vm.batchProgress >= 1f) "Upload Complete" else vm.batchUploadStatus, style = MaterialTheme.typography.labelSmall)
                     LinearProgressIndicator(
-                        progress = vm.batchProgress,
+                        progress = { vm.batchProgress },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
                     )
                 }
