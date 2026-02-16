@@ -66,9 +66,12 @@ fun OnboardingScreen(
         }
     }
 
-    // Auto-advance when step changes
+    // Auto-advance when step changes or via polling
     LaunchedEffect(step) {
-        checkPermissions()
+        while (true) {
+            checkPermissions()
+            kotlinx.coroutines.delay(1000) // Poll every 1s
+        }
     }
     
     // Auto-advance when returning from settings
