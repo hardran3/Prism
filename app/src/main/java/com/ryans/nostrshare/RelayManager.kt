@@ -18,6 +18,7 @@ class RelayManager(
     private val client: OkHttpClient,
     private val settingsRepository: SettingsRepository
 ) {
+    private val eventCache = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     private val bootstrapRelays = listOf("wss://relay.damus.io", "wss://nos.lol")
     private val indexerRelays = listOf(
         "wss://purplepag.es", 
@@ -454,6 +455,7 @@ class RelayManager(
     }
 
     suspend fun fetchEvent(eventId: String, relays: List<String> = emptyList()): JSONObject? = withContext(Dispatchers.IO) {
+        eventCache[eventId]?.let { return@withContext it }
         val relayList = if (relays.isNotEmpty()) relays else bootstrapRelays
         val latch = CountDownLatch(1)
         var result: JSONObject? = null
@@ -479,8 +481,10 @@ class RelayManager(
                         val json = JSONArray(text)
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
+                            val event = json.getJSONObject(2)
                             synchronized(this@RelayManager) { // Synchronize on the outer class instance
-                                result = json.getJSONObject(2)
+                                result = event
+                                eventCache[eventId] = event
                             }
                             webSocket.close(1000, "Done")
                             latch.countDown()
@@ -507,6 +511,8 @@ class RelayManager(
     }
 
     suspend fun fetchAddress(kind: Int, pubkey: String, identifier: String, relays: List<String> = emptyList()): JSONObject? = withContext(Dispatchers.IO) {
+        val cacheKey = "$kind:$pubkey:$identifier"
+        eventCache[cacheKey]?.let { return@withContext it }
         val relayList = if (relays.isNotEmpty()) relays else bootstrapRelays
         val latch = CountDownLatch(1)
         var result: JSONObject? = null
@@ -535,8 +541,10 @@ class RelayManager(
                         val json = JSONArray(text)
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
+                            val event = json.getJSONObject(2)
                             synchronized(this@RelayManager) { // Synchronize on the outer class instance
-                                result = json.getJSONObject(2)
+                                result = event
+                                eventCache[cacheKey] = event
                             }
                             webSocket.close(1000, "Done")
                             latch.countDown()

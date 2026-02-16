@@ -69,11 +69,16 @@ dependencies {
     // OkHttp
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Jsoup
+    implementation("org.jsoup:jsoup:1.18.1")
+
     // Gson
     implementation("com.google.code.gson:gson:2.11.0")
 
     // Coil
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-gif:2.7.0")
+    implementation("io.coil-kt:coil-video:2.7.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

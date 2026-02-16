@@ -1,6 +1,7 @@
 package com.ryans.nostrshare.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -10,6 +11,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.PlayArrow
+import coil.request.videoFrameMillis
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Schedule
@@ -149,7 +152,7 @@ fun DraftList(drafts: List<Draft>, onSelect: (Draft) -> Unit, onDelete: (Draft) 
         }
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
-            items(drafts) { draft ->
+            items(drafts, key = { it.id }) { draft ->
                 DraftItem(draft, onSelect, onDelete, vm, onMediaClick)
             }
         }
@@ -161,7 +164,11 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
     val date = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(draft.lastEdited))
     
     Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onSelect(draft) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable { onSelect(draft) }
+            .animateContentSize(), // Smoothly animate height changes
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
     ) {
         Column(Modifier.padding(12.dp)) {
@@ -171,20 +178,120 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
             }
             Spacer(Modifier.height(4.dp))
             val filteredContent = remember(draft.content) { filterImageUrls(draft.content) }
-            if (filteredContent.isNotBlank()) {
-                Text(
-                    text = filteredContent,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+            
+            // Rich Previews for Draft
+            var linkMetadata by remember(draft.id) { mutableStateOf<com.ryans.nostrshare.utils.LinkMetadata?>(null) }
+            var nostrEvent by remember(draft.id) { mutableStateOf<org.json.JSONObject?>(null) }
+            
+            val firstUrl = remember(draft.content, draft.sourceUrl) {
+                val urlRegex = "https?://[^\\s]+".toRegex()
+                draft.sourceUrl.takeIf { it.startsWith("http") } 
+                    ?: urlRegex.find(draft.content)?.value
+            }
+            
+            val nostrEntity = remember(draft.content, draft.sourceUrl) {
+                NostrUtils.findNostrEntity(draft.sourceUrl) ?: NostrUtils.findNostrEntity(draft.content)
+            }
+
+            LaunchedEffect(firstUrl) {
+                firstUrl?.let { url ->
+                    linkMetadata = com.ryans.nostrshare.utils.LinkPreviewManager.fetchMetadata(url)
+                }
+            }
+
+            LaunchedEffect(nostrEntity) {
+                nostrEntity?.let { entity ->
+                    if (entity.type == "note" || entity.type == "nevent") {
+                        nostrEvent = vm.relayManager.fetchEvent(entity.id, entity.relays)
+                    }
+                }
+            }
+
+            // Combined Media Logic for Draft
+            val combinedMediaItems = remember(draft.mediaJson, draft.content) {
+                val attached = parseMediaJson(draft.mediaJson)
+                val attachedUrls = attached.mapNotNull { it.uploadedUrl?.lowercase() }.toSet()
+                
+                val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
+                val embeddedUrls = mediaUrlPattern.findAll(draft.content)
+                    .map { it.value }
+                    .filter { it.lowercase() !in attachedUrls }
+                    .map { url ->
+                        MediaUploadState(
+                            id = java.util.UUID.randomUUID().toString(),
+                            uri = android.net.Uri.parse(url),
+                            mimeType = when {
+                                url.lowercase().contains(".mp4") || url.lowercase().contains(".mov") || url.lowercase().contains(".webm") -> "video/mp4"
+                                url.lowercase().contains(".gif") -> "image/gif"
+                                else -> "image/jpeg"
+                            }
+                        ).apply { uploadedUrl = url }
+                    }.toList()
+                
+                attached + embeddedUrls
+            }
+
+            val finalContent = remember(draft.content, linkMetadata, nostrEvent, combinedMediaItems) {
+                var content = filteredContent
+                
+                // Hide Link Preview URL only if it has a title or image
+                if (linkMetadata != null && firstUrl != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) {
+                    content = content.replace(firstUrl, "").trim()
+                }
+
+                if (nostrEvent != null && nostrEntity != null) {
+                    content = content.replace(nostrEntity.bech32, "").trim()
+                }
+                
+                val pattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
+                combinedMediaItems.forEach { item ->
+                    item.uploadedUrl?.let { url ->
+                        if (pattern.matches(url)) {
+                            content = content.replace(url, "").trim()
+                        }
+                    }
+                }
+                content
+            }
+
+            if (finalContent.isNotBlank()) {
+                Row(modifier = Modifier.height(IntrinsicSize.Max), verticalAlignment = Alignment.CenterVertically) {
+                    if (draft.kind == 9802) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(4.dp)
+                                .padding(vertical = 2.dp)
+                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                        )
+                        Spacer(Modifier.width(12.dp))
+                    }
+                    Text(
+                        text = finalContent,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            
+            // Show Link Preview
+            linkMetadata?.let { meta ->
+                Spacer(Modifier.height(8.dp))
+                LinkPreviewCard(meta)
+            }
+
+            // Show Nostr Preview
+            nostrEvent?.let { event ->
+                Spacer(Modifier.height(8.dp))
+                NostrEventPreview(event, vm)
             }
             
             // Media Thumbnails for Draft
-            val mediaItems = remember(draft.mediaJson) { parseMediaJson(draft.mediaJson) }
-            if (mediaItems.isNotEmpty()) {
+            if (combinedMediaItems.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
-                MediaThumbnailRow(mediaItems, onMediaClick)
+                MediaThumbnailRow(combinedMediaItems, onMediaClick)
             }
 
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
@@ -211,7 +318,7 @@ fun ScheduledList(
         }
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
-            items(pending) { note ->
+            items(pending, key = { it.id }) { note ->
                 UnifiedPostItem(
                     note = note,
                     vm = vm,
@@ -264,7 +371,7 @@ fun HistoryList(
                 }
             }
             LazyColumn(Modifier.weight(1f)) {
-                items(history) { note ->
+                items(history, key = { it.id }) { note ->
                     UnifiedPostItem(
                         note = note,
                         vm = vm,
@@ -314,7 +421,10 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .animateContentSize(), // Smoothly animate height changes
         colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -393,20 +503,123 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
 
                     Spacer(Modifier.height(4.dp))
                     val filteredContent = remember(note.content) { filterImageUrls(note.content) }
-                    if (filteredContent.isNotBlank()) {
-                        Text(
-                            text = filteredContent,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                    
+                    // Rich Previews
+                    var linkMetadata by remember(note.id) { mutableStateOf<com.ryans.nostrshare.utils.LinkMetadata?>(null) }
+                    var nostrEvent by remember(note.id) { mutableStateOf<org.json.JSONObject?>(null) }
+                    
+                    val firstUrl = remember(note.content, note.sourceUrl) {
+                        val urlRegex = "https?://[^\\s]+".toRegex()
+                        // Prioritize sourceUrl for previews, fallback to content
+                        note.sourceUrl.takeIf { it.startsWith("http") } 
+                            ?: urlRegex.find(note.content)?.value
+                    }
+                    
+                    val nostrEntity = remember(note.content, note.sourceUrl) {
+                        NostrUtils.findNostrEntity(note.sourceUrl) ?: NostrUtils.findNostrEntity(note.content)
+                    }
+
+                    LaunchedEffect(firstUrl) {
+                        firstUrl?.let { url ->
+                            linkMetadata = com.ryans.nostrshare.utils.LinkPreviewManager.fetchMetadata(url)
+                        }
+                    }
+
+                    LaunchedEffect(nostrEntity) {
+                        nostrEntity?.let { entity ->
+                            if (entity.type == "note" || entity.type == "nevent") {
+                                nostrEvent = vm.relayManager.fetchEvent(entity.id, entity.relays)
+                            }
+                        }
+                    }
+
+                    // Combined Media Logic (Attachments + Embedded Links)
+                    val combinedMediaItems = remember(note.mediaJson, note.content) {
+                        val attached = parseMediaJson(note.mediaJson)
+                        val attachedUrls = attached.mapNotNull { it.uploadedUrl?.lowercase() }.toSet()
+                        
+                        val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
+                        val embeddedUrls = mediaUrlPattern.findAll(note.content)
+                            .map { it.value }
+                            .filter { it.lowercase() !in attachedUrls }
+                            .map { url ->
+                                MediaUploadState(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    uri = android.net.Uri.parse(url),
+                                    mimeType = when {
+                                        url.lowercase().contains(".mp4") || url.lowercase().contains(".mov") || url.lowercase().contains(".webm") -> "video/mp4"
+                                        url.lowercase().contains(".gif") -> "image/gif"
+                                        else -> "image/jpeg"
+                                    }
+                                ).apply { uploadedUrl = url }
+                            }.toList()
+                        
+                        attached + embeddedUrls
+                    }
+
+                    val finalContent = remember(filteredContent, linkMetadata, nostrEvent, combinedMediaItems) {
+                        var content = filteredContent
+                        
+                        // Hide Link Preview URL only if it has a title or image
+                        if (linkMetadata != null && firstUrl != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) {
+                            content = content.replace(firstUrl, "").trim()
+                        }
+                        
+                        if (nostrEvent != null && nostrEntity != null) {
+                            content = content.replace(nostrEntity.bech32, "").trim()
+                        }
+                        
+                        val pattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
+                        // Also hide URLs that are now in the thumbnail row
+                        combinedMediaItems.forEach { item ->
+                            item.uploadedUrl?.let { url ->
+                                // Only hide direct media links, not every link that might be in a preview card
+                                if (pattern.matches(url)) {
+                                    content = content.replace(url, "").trim()
+                                }
+                            }
+                        }
+                        content
+                    }
+
+                    if (finalContent.isNotBlank()) {
+                        Row(modifier = Modifier.height(IntrinsicSize.Max), verticalAlignment = Alignment.CenterVertically) {
+                            if (note.kind == 9802) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(4.dp)
+                                        .padding(vertical = 2.dp)
+                                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                                )
+                                Spacer(Modifier.width(12.dp))
+                            }
+                            Text(
+                                text = finalContent,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    
+                    // Show Link Preview
+                    linkMetadata?.let { meta ->
+                        Spacer(Modifier.height(8.dp))
+                        LinkPreviewCard(meta)
+                    }
+
+                    // Show Nostr Preview
+                    nostrEvent?.let { event ->
+                        Spacer(Modifier.height(8.dp))
+                        NostrEventPreview(event, vm)
                     }
                     
                     // Media Thumbnails for UnifiedPostItem
-                    val mediaItems = remember(note.mediaJson) { parseMediaJson(note.mediaJson) }
-                    if (mediaItems.isNotEmpty()) {
+                    if (combinedMediaItems.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
-                        MediaThumbnailRow(mediaItems, onMediaClick)
+                        MediaThumbnailRow(combinedMediaItems, onMediaClick)
                     }
                     
                     if (isCompleted && note.publishError != null) {
@@ -421,9 +634,127 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
     }
 }
 
+@Composable
+fun LinkPreviewCard(meta: com.ryans.nostrshare.utils.LinkMetadata) {
+    if (meta.title == null && meta.imageUrl == null) return
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        ),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+    ) {
+        Column {
+            if (meta.imageUrl != null) {
+                AsyncImage(
+                    model = meta.imageUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1.91f) // Standard OpenGraph aspect ratio for stability
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            Column(Modifier.padding(8.dp)) {
+                meta.title?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                meta.description?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                meta.siteName?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NostrEventPreview(event: org.json.JSONObject, vm: ProcessTextViewModel) {
+    val pubkey = event.optString("pubkey")
+    val content = event.optString("content")
+    val profile = remember(pubkey) { vm.usernameCache[pubkey] }
+    
+    LaunchedEffect(pubkey) {
+        if (vm.usernameCache[pubkey]?.name == null) {
+            vm.resolveUsername(pubkey)
+        }
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.1f)
+        ),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+    ) {
+        Row(Modifier.padding(8.dp)) {
+            if (profile?.pictureUrl != null) {
+                AsyncImage(
+                    model = profile.pictureUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    Icons.Default.Person, 
+                    null, 
+                    Modifier.size(24.dp).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape).padding(4.dp)
+                )
+            }
+            
+            Spacer(Modifier.width(8.dp))
+            
+            Column {
+                Text(
+                    text = profile?.name ?: pubkey.take(8),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = content,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
 fun filterImageUrls(content: String): String {
-    val imageUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
-    return content.replace(imageUrlPattern, "").trim()
+    val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
+    return content.replace(mediaUrlPattern, "").trim()
 }
 
 fun parseMediaJson(json: String?): List<MediaUploadState> {
@@ -459,16 +790,32 @@ fun MediaThumbnailRow(mediaItems: List<MediaUploadState>, onMediaClick: (MediaUp
     ) {
         mediaItems.take(5).forEach { item ->
             val model = item.uploadedUrl ?: item.uri
-            AsyncImage(
-                model = model,
-                contentDescription = null,
+            Box(
                 modifier = Modifier
                     .size(60.dp)
                     .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { onMediaClick(item) },
-                contentScale = ContentScale.Crop
-            )
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .clickable { onMediaClick(item) }
+            ) {
+                AsyncImage(
+                    model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                        .data(model)
+                        .videoFrameMillis(2000)
+                        .build(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                
+                if (item.mimeType?.startsWith("video/") == true) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = androidx.compose.ui.graphics.Color.White,
+                        modifier = Modifier.align(Alignment.Center).size(24.dp)
+                    )
+                }
+            }
         }
         if (mediaItems.size > 5) {
             Box(

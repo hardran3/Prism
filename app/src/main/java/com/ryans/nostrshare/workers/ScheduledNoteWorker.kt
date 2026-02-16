@@ -17,6 +17,8 @@ import com.ryans.nostrshare.utils.NotificationHelper
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.work.ForegroundInfo
+import android.media.AudioAttributes
+import android.net.Uri
 
 import android.content.pm.ServiceInfo
 
@@ -26,7 +28,8 @@ class ScheduledNoteWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
-        const val CHANNEL_ID = "scheduled_posts"
+        const val CHANNEL_ID_PROGRESS = "scheduled_progress"
+        const val CHANNEL_ID_ALERTS = "scheduled_alerts_v2"
         const val NOTIFICATION_ID = 1002
     }
 
@@ -44,7 +47,7 @@ class ScheduledNoteWorker(
 
     private fun createProgressNotification(): android.app.Notification {
         createNotificationChannel()
-        return NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+        return NotificationCompat.Builder(applicationContext, CHANNEL_ID_PROGRESS)
             .setContentTitle("Publishing Scheduled Note")
             .setTicker("Publishing Scheduled Note")
             .setContentText("Broadcasting to relays...")
@@ -196,15 +199,35 @@ class ScheduledNoteWorker(
     }
 
     private fun createNotificationChannel() {
-        val name = "Scheduled Posts"
-        val descriptionText = "Notifications for scheduled Nostr posts"
-        val importance = NotificationManager.IMPORTANCE_DEFAULT
-        val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
-            description = descriptionText
+        val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        
+        // 1. Delete old channel
+        notificationManager.deleteNotificationChannel("scheduled_posts")
+
+        // 2. Create Progress Channel (Silent)
+        val progressName = "Active Posting"
+        val progressDesc = "Shows status of notes being sent"
+        val progressChannel = NotificationChannel(CHANNEL_ID_PROGRESS, progressName, NotificationManager.IMPORTANCE_LOW).apply {
+            description = progressDesc
+            setShowBadge(false)
         }
-        val notificationManager: NotificationManager =
-            applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.createNotificationChannel(channel)
+        notificationManager.createNotificationChannel(progressChannel)
+
+        // 3. Create Alerts Channel (Sound)
+        val alertsName = "Scheduled Posts"
+        val alertsDesc = "Notifications for successfully published notes"
+        val soundUri = Uri.parse("android.resource://${applicationContext.packageName}/raw/prism_notification")
+        
+        val audioAttributes = AudioAttributes.Builder()
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .build()
+
+        val alertsChannel = NotificationChannel(CHANNEL_ID_ALERTS, alertsName, NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = alertsDesc
+            setSound(soundUri, audioAttributes)
+        }
+        notificationManager.createNotificationChannel(alertsChannel)
     }
 
     private fun showNotification(success: Boolean) {
@@ -216,7 +239,7 @@ class ScheduledNoteWorker(
                 android.Manifest.permission.POST_NOTIFICATIONS
             ) == android.content.pm.PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
         ) {
-            val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID_ALERTS)
                 .setSmallIcon(com.ryans.nostrshare.R.drawable.ic_notification_prism)
                 .setContentTitle(title)
                 .setContentText(message)

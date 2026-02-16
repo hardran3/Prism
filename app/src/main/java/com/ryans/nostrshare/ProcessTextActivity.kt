@@ -63,6 +63,7 @@ import android.net.Uri
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontStyle
+import coil.request.videoFrameMillis
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.PersonAdd
@@ -1407,21 +1408,31 @@ fun MediaThumbnail(
                 }
             )
     ) {
-        // Thumbnail Image or Video Icon
-        if (item.mimeType?.startsWith("image/") == true) {
-            val model = item.uploadedUrl ?: item.uri
-            coil.compose.AsyncImage(
-                model = model,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop
-            )
-        } else {
+        // Thumbnail Image or Video
+        val model = item.uploadedUrl ?: item.uri
+        coil.compose.AsyncImage(
+            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                .data(model)
+                .videoFrameMillis(2000) // Capture frame at 2 seconds
+                .build(),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+        )
+        
+        if (item.mimeType?.startsWith("video/") == true) {
             Box(
-                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.2f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Filled.PlayArrow, null, tint = Color.White)
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(32.dp)
+                )
             }
         }
         

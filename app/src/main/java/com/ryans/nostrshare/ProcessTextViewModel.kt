@@ -77,7 +77,7 @@ class ProcessTextViewModel : ViewModel() {
         NostrShareApp.getInstance().getSharedPreferences("nostr_share_prefs", Context.MODE_PRIVATE) 
     }
     val settingsRepository by lazy { SettingsRepository(NostrShareApp.getInstance()) }
-    private val relayManager by lazy { RelayManager(NostrShareApp.getInstance().client, settingsRepository) }
+    val relayManager by lazy { RelayManager(NostrShareApp.getInstance().client, settingsRepository) }
     private val draftDao by lazy { NostrShareApp.getInstance().database.draftDao() }
 
     @OptIn(ExperimentalCoroutinesApi::class)
