@@ -15,6 +15,8 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,79 +47,93 @@ fun DraftsDialog(
     onSaveToDrafts: (Draft) -> Unit,
     onOpenInClient: (String) -> Unit
 ) {
-    val drafts by vm.drafts.collectAsState(initial = emptyList<Draft>())
-    val allScheduled by vm.allScheduled.collectAsState(initial = emptyList<Draft>())
-    val scheduledHistory by vm.scheduledHistory.collectAsState(initial = emptyList<Draft>())
-    var selectedTab by remember { mutableIntStateOf(0) }
-    var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
-
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Scaffold(
             topBar = {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface)
-                        .padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, "Close")
-                    }
-                    TabRow(
-                        selectedTabIndex = selectedTab,
-                        modifier = Modifier.weight(1f),
-                        divider = {} // Remove default divider for cleaner look on same line
-                    ) {
-                        Tab(
-                            selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
-                            text = { Text("Drafts (${drafts.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        )
-                        Tab(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
-                            text = { Text("Scheduled (${allScheduled.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        )
-                        Tab(
-                            selected = selectedTab == 2,
-                            onClick = { selectedTab = 2 },
-                            text = { Text("History (${scheduledHistory.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        )
-                    }
+                IconButton(onClick = onDismiss, modifier = Modifier.padding(8.dp)) {
+                    Icon(Icons.Default.Close, "Close")
                 }
             }
         ) { padding ->
-            Box(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-                when (selectedTab) {
-                    0 -> DraftList(drafts, onSelect = {
+            Box(modifier = Modifier.padding(padding)) {
+                DraftsHistoryContent(
+                    vm = vm,
+                    onEditDraft = {
                         vm.loadDraft(it)
                         onDismiss()
-                    }, onDelete = {
-                        vm.deleteDraft(it.id)
-                    }, vm = vm, onMediaClick = { showMediaDetail = it })
-                    1 -> ScheduledList(allScheduled, vm = vm, onCancel = {
-                        vm.cancelScheduledNote(it)
-                    }, onEditAndReschedule = onEditAndReschedule, onSaveToDrafts = onSaveToDrafts, onMediaClick = { showMediaDetail = it })
-                    2 -> HistoryList(
-                        history = scheduledHistory,
-                        vm = vm,
-                        onClearHistory = { vm.clearScheduledHistory() },
-                        onOpenInClient = onOpenInClient,
-                        onMediaClick = { showMediaDetail = it }
-                    )
-                }
-                
-                showMediaDetail?.let { item ->
-                    MediaDetailDialog(
-                        item = item,
-                        vm = vm,
-                        onDismiss = { showMediaDetail = null }
-                    )
-                }
+                    },
+                    onEditAndReschedule = onEditAndReschedule,
+                    onSaveToDrafts = onSaveToDrafts,
+                    onOpenInClient = onOpenInClient
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun DraftsHistoryContent(
+    vm: ProcessTextViewModel,
+    onEditDraft: (Draft) -> Unit,
+    onEditAndReschedule: (Draft) -> Unit,
+    onSaveToDrafts: (Draft) -> Unit,
+    onOpenInClient: (String) -> Unit
+) {
+    val drafts by vm.drafts.collectAsState(initial = emptyList<Draft>())
+    val allScheduled by vm.allScheduled.collectAsState(initial = emptyList<Draft>())
+    val scheduledHistory by vm.scheduledHistory.collectAsState(initial = emptyList<Draft>())
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TabRow(
+            selectedTabIndex = selectedTab,
+            modifier = Modifier.fillMaxWidth(),
+            divider = {}
+        ) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text("Drafts (${drafts.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text("Scheduled (${allScheduled.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            )
+            Tab(
+                selected = selectedTab == 2,
+                onClick = { selectedTab = 2 },
+                text = { Text("History (${scheduledHistory.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            )
+        }
+
+        Box(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            when (selectedTab) {
+                0 -> DraftList(drafts, onSelect = onEditDraft, onDelete = {
+                    vm.deleteDraft(it.id)
+                }, vm = vm, onMediaClick = { showMediaDetail = it })
+                1 -> ScheduledList(allScheduled, vm = vm, onCancel = {
+                    vm.cancelScheduledNote(it)
+                }, onEditAndReschedule = onEditAndReschedule, onSaveToDrafts = onSaveToDrafts, onMediaClick = { showMediaDetail = it })
+                2 -> HistoryList(
+                    history = scheduledHistory,
+                    vm = vm,
+                    onClearHistory = { vm.clearScheduledHistory() },
+                    onOpenInClient = onOpenInClient,
+                    onMediaClick = { showMediaDetail = it }
+                )
+            }
+            
+            showMediaDetail?.let { item ->
+                MediaDetailDialog(
+                    item = item,
+                    vm = vm,
+                    onDismiss = { showMediaDetail = null }
+                )
             }
         }
     }
@@ -324,6 +340,15 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                 Column(Modifier.weight(1f)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (note.isOfflineRetry && !isCompleted) {
+                                Icon(
+                                    imageVector = Icons.Default.WifiOff,
+                                    contentDescription = "Offline",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(Modifier.width(4.dp))
+                            }
                             Icon(
                                 if (isCompleted) {
                                     if (isSuccess) Icons.Default.Check
@@ -335,7 +360,11 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                                 tint = statusColor
                             )
                             Spacer(Modifier.width(4.dp))
-                            Text(date, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (note.isOfflineRetry && !isCompleted) "Offline - Waiting for Internet" else date,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                         Text(NostrUtils.getKindLabel(note.kind, note.content), style = MaterialTheme.typography.labelSmall)
                     }

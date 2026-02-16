@@ -143,8 +143,6 @@ class ProcessTextActivity : ComponentActivity() {
                 checkExactAlarmAndSchedule(it)
             }
         } else {
-            // Even if denied, we proceed with scheduling (inexact), but let's check exact alarm permission anyway?
-            // User just won't get the alert.
             pendingScheduledTime?.let {
                 checkExactAlarmAndSchedule(it)
             }
@@ -246,6 +244,11 @@ class ProcessTextActivity : ComponentActivity() {
              }
         }
 
+        val draftId = intent.getIntExtra("DRAFT_ID", -1)
+        if (draftId != -1) {
+            viewModel.loadDraftById(draftId)
+        }
+
         setContent {
             NostrShareTheme {
                 Surface(
@@ -253,7 +256,7 @@ class ProcessTextActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     if (!viewModel.isOnboarded) {
-                        OnboardingScreen(viewModel)
+                        com.ryans.nostrshare.ui.OnboardingScreen(viewModel, getPublicKeyLauncher)
                     } else {
                         ShareScreen(viewModel)
                     }
@@ -292,187 +295,6 @@ class ProcessTextActivity : ComponentActivity() {
         }
     }
     
-    @Composable
-    fun OnboardingScreen(vm: ProcessTextViewModel) {
-        val step = vm.currentOnboardingStep
-        
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp)
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                painter = painterResource(id = R.drawable.ic_prism_triangle),
-                contentDescription = null,
-                modifier = Modifier.size(100.dp).clip(CircleShape),
-                tint = Color.Unspecified
-            )
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            when (step) {
-                OnboardingStep.WELCOME -> {
-                    Text(
-                        text = "Welcome to Prism",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Text(
-                        text = "Prism makes it easy to share text, links, and media to the Nostr network. Connect your favorite NIP-55 signer up front to get started.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    
-                    Spacer(modifier = Modifier.height(48.dp))
-                    
-                    Button(
-                        onClick = {
-                            if (Nip55.isSignerAvailable(this@ProcessTextActivity)) {
-                                getPublicKeyLauncher.launch(
-                                    GetPublicKeyContract.Input(
-                                        permissions = listOf(
-                                            Permission.signEvent(9802),
-                                            Permission.signEvent(1),
-                                            Permission.signEvent(24242),
-                                            Permission.signEvent(20),
-                                            Permission.signEvent(22),
-                                            Permission.signEvent(10063)
-                                        ) 
-                                    )
-                                )
-                            } else {
-                                Toast.makeText(this@ProcessTextActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().height(56.dp)
-                    ) {
-                        Icon(Icons.Default.Person, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Sign in with Amber / Signer")
-                    }
-                }
-                OnboardingStep.SYNCING -> {
-                    Text(
-                        text = "Setting up your environment",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    CircularProgressIndicator()
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Text(
-                        text = "Finding your Blossom server list (Kind 10063) on your relays...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                OnboardingStep.SERVER_SELECTION -> {
-                    Text(
-                        text = "Blossom Servers",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Text(
-                        text = "Blossom servers store your media across the Nostr network, keeping you in control of your content.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    Text(
-                        text = "We couldn't find a server list on your relays. We recommend picking between 1-3 servers.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    // Local selection for the defaults
-                    val repoDefaults = remember { viewModel.getFallBackServers() }
-                    var selectedServers by remember { 
-                        mutableStateOf(
-                            repoDefaults.filter { it.url.contains("primal.net") || it.url.contains("blossom.band") }
-                                .map { it.url }.toSet()
-                        ) 
-                    }
-                    
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        repoDefaults.forEach { defaultServer ->
-                            val isSelected = selectedServers.contains(defaultServer.url)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { 
-                                        selectedServers = if (isSelected) {
-                                            selectedServers - defaultServer.url
-                                        } else {
-                                            selectedServers + defaultServer.url
-                                        }
-                                    }
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = { 
-                                        selectedServers = if (isSelected) {
-                                            selectedServers - defaultServer.url
-                                        } else {
-                                            selectedServers + defaultServer.url
-                                        }
-                                    }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(defaultServer.url, style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(32.dp))
-                    
-                    Button(
-                        onClick = {
-                            val serversToSave = repoDefaults.map { 
-                                BlossomServer(it.url, selectedServers.contains(it.url))
-                            }
-                            // Also ensure at least the checked ones are saved, or if none checked, maybe warn?
-                            // For now, just save exactly what they picked (enabled=true for picked).
-                            vm.finishOnboarding(serversToSave)
-                        },
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
-                        enabled = selectedServers.isNotEmpty()
-                    ) {
-                        Text("Save & Start Sharing")
-                    }
-                    
-                    TextButton(onClick = { 
-                        // Just use Primal/Band default and go
-                        vm.finishOnboarding(vm.blossomServers) 
-                    }) {
-                        Text("Skip for now")
-                    }
-                }
-            }
-        }
-    }
-
-
-
     @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
     @Composable
     fun ShareScreen(vm: ProcessTextViewModel) {
@@ -491,7 +313,6 @@ class ProcessTextActivity : ComponentActivity() {
 
         var showConfirmClear by remember { mutableStateOf(false) }
         var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
-        var showDraftsDialog by remember { mutableStateOf(false) }
         var showDatePicker by remember { mutableStateOf(false) }
         var showTimePicker by remember { mutableStateOf(false) }
         var showQuickScheduleOptions by remember { mutableStateOf(false) }
@@ -608,18 +429,6 @@ class ProcessTextActivity : ComponentActivity() {
                         }
                     },
                     actions = {
-
-
-                        // Drafts - Small
-                        IconButton(onClick = {
-                            if (vm.isHapticEnabled()) {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            }
-                            showDraftsDialog = true
-                        }) {
-                             Icon(Icons.Default.Edit, "Manage Drafts")
-                        }
-
                         // Settings - Small
                         IconButton(onClick = {
                             if (vm.isHapticEnabled()) {
@@ -802,8 +611,15 @@ class ProcessTextActivity : ComponentActivity() {
                                     }
 
                                     // Quick Schedule (Clock)
+                                    val hasAlarmPermission = remember {
+                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                            val alarmManager = getSystemService(android.app.AlarmManager::class.java)
+                                            alarmManager.canScheduleExactAlarms()
+                                        } else true
+                                    }
+
                                     androidx.compose.animation.AnimatedVisibility(
-                                        visible = showActionOptions,
+                                        visible = showActionOptions && hasAlarmPermission,
                                         enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
                                         exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End)
                                     ) {
@@ -1035,37 +851,6 @@ class ProcessTextActivity : ComponentActivity() {
                             vm.showUserSearchDialog = false
                             vm.userSearchQuery = ""
                             vm.userSearchResults.clear()
-                        }
-                    )
-                }
-
-                if (showDraftsDialog) {
-                    DraftsDialog(
-                        vm = vm,
-                        onDismiss = { showDraftsDialog = false },
-                        onEditAndReschedule = { draftToEdit ->
-                            vm.loadDraft(draftToEdit)
-                            vm.currentDraftId = draftToEdit.id
-                            showDraftsDialog = false
-                            Toast.makeText(this@ProcessTextActivity, "Loaded for editing. Reschedule to replace.", Toast.LENGTH_LONG).show()
-                        },
-                        onSaveToDrafts = { draftToSave ->
-                            vm.cancelScheduledNote(draftToSave)
-                            vm.currentDraftId = null
-                            vm.loadDraft(draftToSave.copy(isScheduled = false, scheduledAt = null, signedJson = null, isAutoSave = false))
-                            vm.saveManualDraft()
-                            // showDraftsDialog remains open or closes? User said "same as editor", so maybe close.
-                            showDraftsDialog = false
-                            Toast.makeText(this@ProcessTextActivity, "Moved to drafts.", Toast.LENGTH_LONG).show()
-                        },
-                        onOpenInClient = { eventId ->
-                            val noteId = NostrUtils.eventIdToNote(eventId)
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("nostr:$noteId"))
-                            try {
-                                startActivity(intent)
-                            } catch (e: Exception) {
-                                Toast.makeText(this@ProcessTextActivity, "No Nostr client found.", Toast.LENGTH_SHORT).show()
-                            }
                         }
                     )
                 }

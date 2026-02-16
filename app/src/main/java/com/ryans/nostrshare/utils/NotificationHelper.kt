@@ -16,6 +16,8 @@ object NotificationHelper {
 
     const val CHANNEL_ID_SCHEDULE = "prism_scheduler"
     const val NOTIFICATION_ID_SCHEDULED_STATUS = 1001
+    const val SUMMARY_ID = 1000
+    const val GROUP_KEY_SCHEDULED = "com.ryans.nostrshare.SCHEDULED_NOTES"
 
     fun createNotificationChannel(context: Context) {
         val name = "Prism Scheduler"
@@ -33,14 +35,6 @@ object NotificationHelper {
     fun updateScheduledNotification(context: Context) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Get count from DB
-                // We need to access DB here. If Dependency Injection was used it would be cleaner, 
-                // but we can access via Room builder or if App has a static instance. 
-                // Assuming we can build a fresh instance or use a provided one. 
-                // For safety/simplicity in this helper, let's look at how the App does it or pass DAO.
-                // Re-creating DB instance might be expensive. 
-                // Let's assume we can query via a passed function or similar if needed, 
-                // but to keep it simple and encapsulated:
                 val contextApp = context.applicationContext
                 val db = try {
                     (contextApp as? com.ryans.nostrshare.NostrShareApp)?.database
@@ -49,29 +43,75 @@ object NotificationHelper {
                     DraftDatabase.getDatabase(contextApp)
                 }
                 
-                val count = db.draftDao().getScheduledCount() // We need to add this method to DAO
+                val groupedCounts = db.draftDao().getScheduledCountByPubkey()
+                val allKnownPubkeys = db.draftDao().getAllPubkeys()
+                val settings = com.ryans.nostrshare.SettingsRepository(contextApp)
+                val userCache = settings.getUsernameCache()
                 
                 with(NotificationManagerCompat.from(context)) {
-                    if (count > 0) {
-                        // Create persistent notification
-                        if (androidx.core.content.ContextCompat.checkSelfPermission(
-                                context,
-                                android.Manifest.permission.POST_NOTIFICATIONS
-                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-                        ) {
-                            val builder = NotificationCompat.Builder(context, CHANNEL_ID_SCHEDULE)
-                                .setSmallIcon(R.drawable.ic_notification_prism)
-                                .setContentTitle("Prism Scheduler")
-                                .setContentText("$count note(s) scheduled for publication")
-                                .setPriority(NotificationCompat.PRIORITY_LOW)
-                                .setOngoing(true)
-                                .setOnlyAlertOnce(true)
+                    if (groupedCounts.isEmpty()) {
+                        cancel(SUMMARY_ID)
+                        allKnownPubkeys.forEach { cancel(it.hashCode()) }
+                        return@with
+                    }
 
-                            notify(NOTIFICATION_ID_SCHEDULED_STATUS, builder.build())
+                    val countsMap = groupedCounts.associate { (it.pubkey ?: "Unknown") to it.count }
+                    
+                    // Cleanup any users who no longer have notes
+                    allKnownPubkeys.forEach { pk ->
+                        if (!countsMap.containsKey(pk)) {
+                            cancel(pk.hashCode())
                         }
-                    } else {
-                        // Cancel
-                        cancel(NOTIFICATION_ID_SCHEDULED_STATUS)
+                    }
+
+                    val totalNotes = groupedCounts.sumOf { it.count }
+                    val totalUsers = groupedCounts.size
+
+                    if (androidx.core.content.ContextCompat.checkSelfPermission(
+                            context,
+                            android.Manifest.permission.POST_NOTIFICATIONS
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                    ) {
+                        // 1. Individual Notifications
+                        groupedCounts.forEach { group ->
+                            val pk = group.pubkey ?: "Unknown"
+                            val hash = pk.hashCode()
+                            
+                            val username = userCache[pk]?.name ?: pk.take(8)
+                            val noteText = if (group.count == 1) "1 note" else "${group.count} notes"
+                            
+                            val individualBuilder = NotificationCompat.Builder(context, CHANNEL_ID_SCHEDULE)
+                                .setSmallIcon(R.drawable.ic_notification_prism)
+                                .setContentTitle(username)
+                                .setContentText("$noteText scheduled")
+                                .setPriority(NotificationCompat.PRIORITY_LOW)
+                                .setGroup(GROUP_KEY_SCHEDULED)
+                                .setSilent(true) 
+                                .setOngoing(true)
+
+                            notify(hash, individualBuilder.build())
+                        }
+
+                        // 2. Summary Notification
+                        val summaryText = if (totalUsers == 1) {
+                            "Scheduled notes for 1 account"
+                        } else {
+                            "$totalNotes notes across $totalUsers accounts"
+                        }
+
+                        val summaryBuilder = NotificationCompat.Builder(context, CHANNEL_ID_SCHEDULE)
+                            .setSmallIcon(R.drawable.ic_notification_prism)
+                            .setContentTitle("Prism Scheduler")
+                            .setContentText(summaryText)
+                            .setStyle(NotificationCompat.InboxStyle()
+                                .setSummaryText("Scheduled Posts"))
+                            .setPriority(NotificationCompat.PRIORITY_LOW)
+                            .setGroup(GROUP_KEY_SCHEDULED)
+                            .setGroupSummary(true)
+                            .setOngoing(true)
+                            .setSilent(true)
+
+                        notify(SUMMARY_ID, summaryBuilder.build())
                     }
                 }
             } catch (e: Exception) {

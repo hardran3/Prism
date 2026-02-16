@@ -28,7 +28,9 @@ import com.ryans.nostrshare.data.Draft
 enum class OnboardingStep {
     WELCOME,
     SYNCING,
-    SERVER_SELECTION
+    SERVER_SELECTION,
+    ALARM_PERMISSION,
+    BATTERY_OPTIMIZATION
 }
 
 class ProcessTextViewModel : ViewModel() {
@@ -110,6 +112,9 @@ class ProcessTextViewModel : ViewModel() {
     var uploadedMediaSize by mutableStateOf<Long?>(null)
 
     init {
+        val onboardedFromRepo = settingsRepository.isOnboarded()
+        isOnboarded = onboardedFromRepo
+
         // Load persisted session
         val savedPubkey = prefs.getString("pubkey", null)
         if (savedPubkey != null) {
@@ -123,17 +128,14 @@ class ProcessTextViewModel : ViewModel() {
                 userProfile = UserProfile(savedName, savedPic)
             }
             
-            // Refresh profile in background
-            refreshUserProfile()
+            // Refresh profile in background only if already fully onboarded
+            if (isOnboarded) {
+                refreshUserProfile()
+            }
         }
         
         // Initialize Blossom servers
         blossomServers = settingsRepository.getBlossomServers()
-        
-        val onboardedFromRepo = settingsRepository.isOnboarded()
-        // We consider someone onboarded if they have a pubkey AND at least some (non-factory-default) servers OR if they've explicitly finished it.
-        // For now, let's just stick to pubkey check but hide main UI until servers are ready.
-        isOnboarded = onboardedFromRepo && blossomServers.size > 2
         
         if (!isOnboarded) {
             currentOnboardingStep = OnboardingStep.WELCOME
@@ -147,6 +149,13 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun isHapticEnabled(): Boolean = settingsRepository.isHapticEnabled()
+
+    private fun isNetworkAvailable(): Boolean {
+        val connectivityManager = NostrShareApp.getInstance().getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
 
     fun login(hexKey: String, npubKey: String?, pkgName: String?) {
         pubkey = hexKey
@@ -211,28 +220,14 @@ class ProcessTextViewModel : ViewModel() {
                 isSyncingServers = true
                 val discoveredUrls = relayManager.fetchBlossomServerList(pk)
                 if (discoveredUrls.isNotEmpty()) {
-                    val currentServers = settingsRepository.getBlossomServers()
-                    val existingUrls = currentServers.map { it.url }.toSet()
-                    
-                    val newServers = currentServers.toMutableList()
-                    discoveredUrls.forEach { url ->
+                    // Replace local list with truth from relay
+                    val newServers = discoveredUrls.map { url ->
                         val cleanUrl = url.trim().removeSuffix("/")
-                        if (!existingUrls.contains(cleanUrl) && !existingUrls.contains("$cleanUrl/")) {
-                            newServers.add(BlossomServer(cleanUrl, true))
-                        }
+                        BlossomServer(cleanUrl, true)
                     }
                     
-                    if (newServers.size > currentServers.size) {
-                        blossomServers = newServers
-                        // If we found servers via 10063, we can likely just finish onboarding
-                        finishOnboarding(newServers)
-                    } else if (discoveredUrls.isNotEmpty()) {
-                        // Found list but no changes needed? Just finish.
-                        finishOnboarding(currentServers)
-                    } else {
-                        // No 10063 found
-                        currentOnboardingStep = OnboardingStep.SERVER_SELECTION
-                    }
+                    blossomServers = newServers
+                    saveServersAndContinue(newServers)
                 } else {
                     // No 10063 found
                     currentOnboardingStep = OnboardingStep.SERVER_SELECTION
@@ -245,9 +240,14 @@ class ProcessTextViewModel : ViewModel() {
         }
     }
 
-    fun finishOnboarding(servers: List<BlossomServer>) {
+    fun saveServersAndContinue(servers: List<BlossomServer>) {
         settingsRepository.setBlossomServers(servers)
         blossomServers = servers
+        currentOnboardingStep = OnboardingStep.ALARM_PERMISSION
+    }
+
+    fun completeOnboarding() {
+        settingsRepository.setOnboarded(true)
         isOnboarded = true
     }
 
@@ -403,6 +403,17 @@ class ProcessTextViewModel : ViewModel() {
         
         // Generate event JSON with the FUTURE timestamp
         val eventJson = prepareEventJson(createdAt = timestamp / 1000)
+        
+        val pk = pubkey
+        val pkg = signerPackageName
+        if (pk != null && pkg != null) {
+            val signed = com.ryans.nostrshare.nip55.Nip55.signEventBackground(NostrShareApp.getInstance(), pkg, eventJson, pk)
+            if (signed != null) {
+                onEventSigned(signed)
+                return
+            }
+        }
+
         _eventToSign.value = eventJson
     }
 
@@ -427,8 +438,14 @@ class ProcessTextViewModel : ViewModel() {
             val id = draftDao.insertDraft(draft)
             com.ryans.nostrshare.utils.SchedulerUtils.enqueueScheduledWork(
                 NostrShareApp.getInstance(),
-                draft.copy(id = id.toInt())
+                draft.copy(id = id.toInt()),
+                forceRefresh = true
             )
+            
+            com.ryans.nostrshare.utils.NotificationHelper.updateScheduledNotification(NostrShareApp.getInstance())
+            
+            publishStatus = "Note scheduled!"
+            publishSuccess = true
             
             // Clear editor after scheduling
             clearContent()
@@ -441,24 +458,7 @@ class ProcessTextViewModel : ViewModel() {
             draftDao.deleteDraft(draft)
             
             val context = NostrShareApp.getInstance()
-            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-            
-            val intent = android.content.Intent(context, com.ryans.nostrshare.receivers.ScheduleReceiver::class.java).apply {
-                action = com.ryans.nostrshare.receivers.ScheduleReceiver.ACTION_PUBLISH_SCHEDULED
-                putExtra(com.ryans.nostrshare.receivers.ScheduleReceiver.EXTRA_DRAFT_ID, draft.id)
-            }
-            
-            val pendingIntent = android.app.PendingIntent.getBroadcast(
-                context,
-                draft.id,
-                intent,
-                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_NO_CREATE
-            )
-            
-            if (pendingIntent != null) {
-                alarmManager.cancel(pendingIntent)
-                pendingIntent.cancel()
-            }
+            com.ryans.nostrshare.utils.SchedulerUtils.cancelScheduledWork(context, draft.id)
             
             // Update notification
             com.ryans.nostrshare.utils.NotificationHelper.updateScheduledNotification(context)
@@ -614,6 +614,16 @@ class ProcessTextViewModel : ViewModel() {
                 
                 // 3. Ask Activity to Sign
                 currentSigningPurpose = SigningPurpose.UPLOAD_AUTH
+                
+                val pkg = signerPackageName
+                if (pkg != null) {
+                    val signed = com.ryans.nostrshare.nip55.Nip55.signEventBackground(NostrShareApp.getInstance(), pkg, authEventJson, pk)
+                    if (signed != null) {
+                        onEventSigned(signed)
+                        return@launch
+                    }
+                }
+
                 _eventToSign.value = authEventJson
                 
             } catch (e: Exception) {
@@ -634,6 +644,35 @@ class ProcessTextViewModel : ViewModel() {
         isBatchUploading = true
         batchUploadStatus = "Starting sequential upload..."
         
+        val pkg = signerPackageName
+        val pk = pubkey
+        if (pkg != null && pk != null) {
+            val authEvents = mutableListOf<String>()
+            itemsToUpload.forEach { item ->
+                val stableUri = processedMediaUris[item.id]
+                if (stableUri != null) {
+                    val authEventJson = blossomClient.createAuthEventJson(
+                        item.hash ?: "",
+                        item.size,
+                        pk,
+                        "upload",
+                        fileName = stableUri.lastPathSegment,
+                        mimeType = item.mimeType
+                    )
+                    authEvents.add(authEventJson)
+                }
+            }
+
+            if (authEvents.isNotEmpty()) {
+                val signed = com.ryans.nostrshare.nip55.Nip55.signEventsBackground(context, pkg, authEvents, pk)
+                if (signed != null) {
+                    currentSigningPurpose = SigningPurpose.BATCH_UPLOAD_AUTH
+                    onBatchEventsSigned(signed)
+                    return
+                }
+            }
+        }
+
         // Start the first one - it will trigger subsequent ones in finalizeUpload
         val first = itemsToUpload.first()
         initiateUploadAuth(context, first)
@@ -729,6 +768,16 @@ class ProcessTextViewModel : ViewModel() {
                  
                  val authEventJson = blossomClient.createAuthEventJson(hashForAuth, null, pk, "delete")
                  currentSigningPurpose = SigningPurpose.DELETE_AUTH
+
+                 val pkg = signerPackageName
+                 if (pkg != null) {
+                     val signed = com.ryans.nostrshare.nip55.Nip55.signEventBackground(NostrShareApp.getInstance(), pkg, authEventJson, pk)
+                     if (signed != null) {
+                         onEventSigned(signed)
+                         return@launch
+                     }
+                 }
+
                  _eventToSign.value = authEventJson
             } catch (e: Exception) {
                 item.status = "Delete Error: ${e.message}"
@@ -739,11 +788,19 @@ class ProcessTextViewModel : ViewModel() {
                 
 
 
-    // LiveData/Flow to communicate with Activity for signing
     private val _eventToSign = MutableStateFlow<String?>(null)
     val eventToSign: StateFlow<String?> = _eventToSign.asStateFlow()
     
     fun requestSignature(json: String) {
+        val pk = pubkey
+        val pkg = signerPackageName
+        if (pk != null && pkg != null) {
+            val signed = com.ryans.nostrshare.nip55.Nip55.signEventBackground(NostrShareApp.getInstance(), pkg, json, pk)
+            if (signed != null) {
+                onEventSigned(signed)
+                return
+            }
+        }
         _eventToSign.value = json
     }
     
@@ -1073,6 +1130,15 @@ class ProcessTextViewModel : ViewModel() {
             val autoDraft = draftDao.getAutoSaveDraft(pubkey)
             autoDraft?.let { loadDraft(it) }
             showDraftPrompt = false
+        }
+    }
+
+    fun loadDraftById(id: Int) {
+        viewModelScope.launch {
+            val draft = draftDao.getDraftById(id)
+            if (draft != null) {
+                loadDraft(draft)
+            }
         }
     }
 
@@ -1449,7 +1515,9 @@ class ProcessTextViewModel : ViewModel() {
                     val results = withContext(Dispatchers.IO) {
                          relayManager.publishEvent(signedEvent, relaysToPublish)
                     }
-                    if (results.any { it.value }) {
+                    // Count as success only if published to at least one non-localhost relay
+                    val nonLocalhostSuccess = results.filter { it.key != "ws://localhost:4869" }.any { it.value }
+                    if (nonLocalhostSuccess) {
                         totalPostSuccess++
                     }
                     results.forEach { (relay, success) ->
@@ -1467,14 +1535,69 @@ class ProcessTextViewModel : ViewModel() {
                     publishSuccess = true
                     discardDraft()
                 } else {
-                    publishStatus = "Failed to publish."
-                    publishSuccess = false
+                    if (!isNetworkAvailable()) {
+                        // Offline retry logic
+                        val mediaJson = serializeMediaItems(mediaItems)
+                        val draft = Draft(
+                            content = quoteContent,
+                            sourceUrl = sourceUrl,
+                            kind = postKind.kind,
+                            mediaJson = mediaJson,
+                            mediaTitle = mediaTitle,
+                            pubkey = pubkey,
+                            isScheduled = true,
+                            isOfflineRetry = true,
+                            scheduledAt = System.currentTimeMillis(),
+                            signedJson = signedEventsJson.firstOrNull(), // Use the first signed event for retry
+                            isAutoSave = false
+                        )
+                        val id = draftDao.insertDraft(draft)
+                        com.ryans.nostrshare.utils.SchedulerUtils.enqueueOfflineRetry(
+                            NostrShareApp.getInstance(),
+                            draft.copy(id = id.toInt())
+                        )
+                        publishStatus = "Offline. Note will be sent when internet returns."
+                        publishSuccess = true // Mark as success to close the editor, but it's actually queued
+                        clearContent()
+                    } else {
+                        publishStatus = "Failed to publish."
+                        publishSuccess = false
+                    }
                 }
                 isPublishing = false
             } catch (e: Exception) {
-                publishStatus = "Error: ${e.message}"
-                publishSuccess = false
-                isPublishing = false
+                if (!isNetworkAvailable()) {
+                    // Offline retry logic in case of exception
+                    viewModelScope.launch {
+                        val mediaJson = serializeMediaItems(mediaItems)
+                        val draft = Draft(
+                            content = quoteContent,
+                            sourceUrl = sourceUrl,
+                            kind = postKind.kind,
+                            mediaJson = mediaJson,
+                            mediaTitle = mediaTitle,
+                            pubkey = pubkey,
+                            isScheduled = true,
+                            isOfflineRetry = true,
+                            scheduledAt = System.currentTimeMillis(),
+                            signedJson = signedEventsJson.firstOrNull(),
+                            isAutoSave = false
+                        )
+                        val id = draftDao.insertDraft(draft)
+                        com.ryans.nostrshare.utils.SchedulerUtils.enqueueOfflineRetry(
+                            NostrShareApp.getInstance(),
+                            draft.copy(id = id.toInt())
+                        )
+                        publishStatus = "Offline. Note will be sent when internet returns."
+                        publishSuccess = true
+                        clearContent()
+                        isPublishing = false
+                    }
+                } else {
+                    publishStatus = "Error: ${e.message}"
+                    publishSuccess = false
+                    isPublishing = false
+                }
             }
         }
     }

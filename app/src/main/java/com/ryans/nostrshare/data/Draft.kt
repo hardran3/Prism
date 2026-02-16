@@ -24,5 +24,6 @@ data class Draft(
     val isAutoSave: Boolean = false,
     val isCompleted: Boolean = false,
     val publishError: String? = null,
-    val publishedEventId: String? = null
+    val publishedEventId: String? = null,
+    val isOfflineRetry: Boolean = false
 )

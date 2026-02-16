@@ -321,8 +321,9 @@ class RelayManager(
     }
 
     suspend fun fetchBlossomServerList(pubkey: String): List<String> = withContext(Dispatchers.IO) {
-        val serverList = mutableSetOf<String>()
-        val latch = CountDownLatch(1)
+        val serverList = mutableListOf<String>()
+        var latestTimestamp = 0L
+        val latch = CountDownLatch(indexerRelays.size + bootstrapRelays.size)
         
         val targetRelays = indexerRelays + bootstrapRelays
 
@@ -335,7 +336,7 @@ class RelayManager(
                     val filter = JSONObject()
                     filter.put("kinds", JSONArray().put(10063)) // Kind 10063: Blossom Server List
                     filter.put("authors", JSONArray().put(pubkey))
-                    filter.put("limit", 1)
+                    filter.put("limit", 5) // Get a few latest to be safe
                     val req = JSONArray()
                     req.put("REQ")
                     req.put(subId)
@@ -349,21 +350,26 @@ class RelayManager(
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
                             val event = json.getJSONObject(2)
-                            val tags = event.optJSONArray("tags")
-                            if (tags != null) {
-                                for (i in 0 until tags.length()) {
-                                    val tag = tags.getJSONArray(i)
-                                    if (tag.length() > 1 && tag.getString(0) == "server") {
-                                        synchronized(serverList) {
-                                            serverList.add(tag.getString(1))
+                            val createdAt = event.optLong("created_at", 0L)
+                            
+                            synchronized(this@RelayManager) {
+                                if (createdAt > latestTimestamp) {
+                                    latestTimestamp = createdAt
+                                    serverList.clear()
+                                    val tags = event.optJSONArray("tags")
+                                    if (tags != null) {
+                                        for (i in 0 until tags.length()) {
+                                            val tag = tags.getJSONArray(i)
+                                            if (tag.length() > 1 && tag.getString(0) == "server") {
+                                                serverList.add(tag.getString(1))
+                                            }
                                         }
                                     }
                                 }
                             }
-                            webSocket.close(1000, "Done")
-                            latch.countDown()
                         } else if (type == "EOSE" && json.optString(1) == subId) {
                            webSocket.close(1000, "EOSE")
+                           latch.countDown()
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -371,7 +377,7 @@ class RelayManager(
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                     // Fail silently
+                     latch.countDown()
                 }
             }
             client.newWebSocket(request, listener)

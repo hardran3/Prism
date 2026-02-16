@@ -31,8 +31,11 @@ class SettingsRepository(private val appContext: Context) {
     )
 
     fun isOnboarded(): Boolean {
-        val globalPrefs = appContext.getSharedPreferences("nostr_share_prefs", Context.MODE_PRIVATE)
-        return globalPrefs.getString("pubkey", null) != null
+        return prefs.getBoolean("onboarded_completed", false)
+    }
+
+    fun setOnboarded(onboarded: Boolean) {
+        prefs.edit().putBoolean("onboarded_completed", onboarded).apply()
     }
 
     fun isAlwaysUseKind1(): Boolean = prefs.getBoolean("always_kind_1", false)
