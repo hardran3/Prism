@@ -29,8 +29,7 @@ enum class OnboardingStep {
     WELCOME,
     SYNCING,
     SERVER_SELECTION,
-    ALARM_PERMISSION,
-    BATTERY_OPTIMIZATION
+    SCHEDULING_CONFIG
 }
 
 class ProcessTextViewModel : ViewModel() {
@@ -55,6 +54,7 @@ class ProcessTextViewModel : ViewModel() {
     
     // Onboarding State
     var isOnboarded by mutableStateOf(false)
+    var isSchedulingEnabled by mutableStateOf(false)
     var currentOnboardingStep by mutableStateOf(OnboardingStep.WELCOME)
     var isSyncingServers by mutableStateOf(false)
 
@@ -114,6 +114,7 @@ class ProcessTextViewModel : ViewModel() {
     init {
         val onboardedFromRepo = settingsRepository.isOnboarded()
         isOnboarded = onboardedFromRepo
+        isSchedulingEnabled = settingsRepository.isSchedulingEnabled()
 
         // Load persisted session
         val savedPubkey = prefs.getString("pubkey", null)
@@ -243,12 +244,29 @@ class ProcessTextViewModel : ViewModel() {
     fun saveServersAndContinue(servers: List<BlossomServer>) {
         settingsRepository.setBlossomServers(servers)
         blossomServers = servers
-        currentOnboardingStep = OnboardingStep.ALARM_PERMISSION
+        currentOnboardingStep = OnboardingStep.SCHEDULING_CONFIG
     }
 
     fun completeOnboarding() {
         settingsRepository.setOnboarded(true)
         isOnboarded = true
+    }
+
+    fun startSchedulingOnboarding() {
+        currentOnboardingStep = OnboardingStep.SCHEDULING_CONFIG
+        isOnboarded = false
+    }
+
+    fun completeSchedulingConfig() {
+        settingsRepository.setSchedulingEnabled(true)
+        isSchedulingEnabled = true
+        completeOnboarding()
+    }
+
+    fun skipSchedulingConfig() {
+        settingsRepository.setSchedulingEnabled(false)
+        isSchedulingEnabled = false
+        completeOnboarding()
     }
 
     fun getFallBackServers(): List<BlossomServer> {
@@ -466,7 +484,9 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun verifyScheduledNotes(context: Context) {
-        com.ryans.nostrshare.utils.SchedulerUtils.verifyAllScheduledNotes(context)
+        if (isSchedulingEnabled) {
+            com.ryans.nostrshare.utils.SchedulerUtils.verifyAllScheduledNotes(context)
+        }
     }
 
     fun clearScheduledHistory() {

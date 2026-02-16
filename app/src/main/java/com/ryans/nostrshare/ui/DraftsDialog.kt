@@ -99,16 +99,18 @@ fun DraftsHistoryContent(
                 onClick = { selectedTab = 0 },
                 text = { Text("Drafts (${drafts.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             )
-            Tab(
-                selected = selectedTab == 1,
-                onClick = { selectedTab = 1 },
-                text = { Text("Scheduled (${allScheduled.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            )
-            Tab(
-                selected = selectedTab == 2,
-                onClick = { selectedTab = 2 },
-                text = { Text("History (${scheduledHistory.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            )
+            if (vm.isSchedulingEnabled) {
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("Scheduled (${allScheduled.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                )
+                Tab(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    text = { Text("History (${scheduledHistory.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                )
+            }
         }
 
         Box(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -360,8 +362,24 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                                 tint = statusColor
                             )
                             Spacer(Modifier.width(4.dp))
+                            
+                            val displayTime = remember(note.scheduledAt, note.actualPublishedAt) {
+                                val scheduled = note.scheduledAt ?: note.lastEdited
+                                val scheduledStr = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(scheduled))
+                                
+                                if (isSuccess && note.actualPublishedAt != null && note.scheduledAt != null) {
+                                    val diffMs = note.actualPublishedAt - note.scheduledAt
+                                    val diffSeconds = (diffMs / 1000) % 60
+                                    val diffMinutes = (diffMs / (1000 * 60))
+                                    val offsetStr = String.format("(+%d:%02d)", diffMinutes, diffSeconds)
+                                    "$scheduledStr $offsetStr"
+                                } else {
+                                    scheduledStr
+                                }
+                            }
+
                             Text(
-                                text = if (note.isOfflineRetry && !isCompleted) "Offline - Waiting for Internet" else date,
+                                text = if (note.isOfflineRetry && !isCompleted) "Offline - Waiting for Internet" else displayTime,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )

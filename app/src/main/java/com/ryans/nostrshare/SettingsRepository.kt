@@ -38,6 +38,9 @@ class SettingsRepository(private val appContext: Context) {
         prefs.edit().putBoolean("onboarded_completed", onboarded).apply()
     }
 
+    fun isSchedulingEnabled(): Boolean = prefs.getBoolean("scheduling_enabled", false)
+    fun setSchedulingEnabled(enabled: Boolean) = prefs.edit().putBoolean("scheduling_enabled", enabled).apply()
+
     fun isAlwaysUseKind1(): Boolean = prefs.getBoolean("always_kind_1", false)
     fun setAlwaysUseKind1(enabled: Boolean) = prefs.edit().putBoolean("always_kind_1", enabled).apply()
 

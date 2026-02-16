@@ -2,6 +2,7 @@ package com.ryans.nostrshare.ui
 
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -11,6 +12,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,10 +37,14 @@ import android.os.Build
 import android.provider.Settings
 import android.content.Intent
 import android.net.Uri
-
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 @Composable
 fun OnboardingScreen(
@@ -47,21 +55,36 @@ fun OnboardingScreen(
     val step = vm.currentOnboardingStep
     val lifecycleOwner = LocalLifecycleOwner.current
     
+    var hasAlarmPermission by remember { mutableStateOf(false) }
+    var hasBatteryPermission by remember { mutableStateOf(false) }
+    var hasNotificationPermission by remember { mutableStateOf(false) }
+
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasNotificationPermission = isGranted
+    }
+
     // Function to perform checks
     fun checkPermissions() {
-        if (step == OnboardingStep.ALARM_PERMISSION) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                vm.currentOnboardingStep = OnboardingStep.BATTERY_OPTIMIZATION
-            } else {
-                val alarmManager = context.getSystemService(AlarmManager::class.java)
-                if (alarmManager.canScheduleExactAlarms()) {
-                    vm.currentOnboardingStep = OnboardingStep.BATTERY_OPTIMIZATION
-                }
-            }
-        } else if (step == OnboardingStep.BATTERY_OPTIMIZATION) {
+        if (step == OnboardingStep.SCHEDULING_CONFIG) {
+            // Check Alarms
+            hasAlarmPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+            } else true
+
+            // Check Battery
             val pm = context.getSystemService(PowerManager::class.java)
-            if (pm.isIgnoringBatteryOptimizations(context.packageName)) {
-                vm.completeOnboarding()
+            hasBatteryPermission = pm.isIgnoringBatteryOptimizations(context.packageName)
+
+            // Check Notifications
+            hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else true
+
+            // Auto-advance if ALL are granted
+            if (hasAlarmPermission && hasBatteryPermission && hasNotificationPermission) {
+                vm.completeSchedulingConfig()
             }
         }
     }
@@ -95,17 +118,11 @@ fun OnboardingScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        val icon = when (step) {
-            OnboardingStep.ALARM_PERMISSION -> Icons.Default.AccessTime
-            OnboardingStep.BATTERY_OPTIMIZATION -> Icons.Default.BatteryChargingFull
-            else -> null
-        }
-
-        if (icon != null) {
+        if (step == OnboardingStep.SCHEDULING_CONFIG) {
             Icon(
-                imageVector = icon,
+                imageVector = Icons.Default.Schedule,
                 contentDescription = null,
-                modifier = Modifier.size(100.dp),
+                modifier = Modifier.size(80.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
         } else {
@@ -270,9 +287,9 @@ fun OnboardingScreen(
                     Text("Skip for now")
                 }
             }
-            OnboardingStep.ALARM_PERMISSION -> {
+            OnboardingStep.SCHEDULING_CONFIG -> {
                 Text(
-                    text = "Scheduled Posting",
+                    text = "Scheduling Setup",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
@@ -280,71 +297,120 @@ fun OnboardingScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 Text(
-                    text = "To publish your notes at an exact time, Prism needs permission to set precise alarms. This ensures your content goes live even if the app is closed.",
-                    style = MaterialTheme.typography.bodyLarge,
+                    text = "For the most reliable scheduled posting, especially on mobile data, please enable the following settings.",
+                    style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 
-                Spacer(modifier = Modifier.height(48.dp))
+                Spacer(modifier = Modifier.height(32.dp))
                 
-                Button(
+                PermissionRow(
+                    title = "Precise Alarms",
+                    description = "Ensures notes trigger exactly on time.",
+                    isGranted = hasAlarmPermission,
+                    icon = Icons.Default.AccessTime,
                     onClick = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
                                 data = Uri.parse("package:${context.packageName}")
                             }
                             context.startActivity(intent)
-                        } else {
-                            vm.currentOnboardingStep = OnboardingStep.BATTERY_OPTIMIZATION
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(56.dp)
-                ) {
-                    Text("Grant Alarm Permission")
-                }
-                
-                TextButton(onClick = { 
-                    vm.currentOnboardingStep = OnboardingStep.BATTERY_OPTIMIZATION
-                }) {
-                    Text("Skip")
-                }
-            }
-            OnboardingStep.BATTERY_OPTIMIZATION -> {
-                Text(
-                    text = "Reliable Background Tasks",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
+                    }
                 )
                 
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                Text(
-                    text = "Android's battery optimizations can sometimes delay or prevent background tasks. For the best experience, we recommend setting Prism to 'Unrestricted'.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                
-                Spacer(modifier = Modifier.height(48.dp))
-                
-                Button(
+                PermissionRow(
+                    title = "Battery Unrestricted",
+                    description = "Prevents system from killing background tasks.",
+                    isGranted = hasBatteryPermission,
+                    icon = Icons.Default.BatteryChargingFull,
                     onClick = {
                         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                             data = Uri.parse("package:${context.packageName}")
                         }
                         context.startActivity(intent)
-                    },
-                    modifier = Modifier.fillMaxWidth().height(56.dp)
-                ) {
-                    Text("Remove Restrictions")
-                }
+                    }
+                )
                 
-                TextButton(onClick = { 
-                    vm.completeOnboarding()
-                }) {
-                    Text("Finish Onboarding")
+                PermissionRow(
+                    title = "Notifications",
+                    description = "Required for foreground execution on Android 13+.",
+                    isGranted = hasNotificationPermission,
+                    icon = Icons.Default.Notifications,
+                    onClick = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    }
+                )
+                
+                Spacer(modifier = Modifier.height(48.dp))
+                
+                TextButton(
+                    onClick = { vm.skipSchedulingConfig() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Skip scheduling setup")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun PermissionRow(
+    title: String,
+    description: String,
+    isGranted: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(
+                    if (isGranted) Color(0xFF4CAF50).copy(alpha = 0.1f) 
+                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                    CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = if (isGranted) Color(0xFF4CAF50) else MaterialTheme.colorScheme.primary
+            )
+        }
+        
+        Spacer(modifier = Modifier.width(16.dp))
+        
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(description, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        
+        if (isGranted) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = "Ready",
+                tint = Color(0xFF4CAF50),
+                modifier = Modifier.size(24.dp)
+            )
+        } else {
+            Button(
+                onClick = onClick,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.height(32.dp)
+            ) {
+                Text("Enable", style = MaterialTheme.typography.labelMedium)
             }
         }
     }

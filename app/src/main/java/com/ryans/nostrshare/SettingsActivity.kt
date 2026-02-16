@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.ui.text.input.KeyboardType
 
 class SettingsActivity : ComponentActivity() {
@@ -251,6 +252,30 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
         
         if (showLogDialog) {
             SchedulerLogDialog(onDismiss = { showLogDialog = false })
+        }
+
+        // Setup Scheduling button if disabled
+        val context = androidx.compose.ui.platform.LocalContext.current
+        
+        if (!repo.isSchedulingEnabled()) {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+            Button(
+                onClick = {
+                    if (repo.isHapticEnabled()) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    }
+                    val intent = Intent(context, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        putExtra("START_SCHEDULING_SETUP", true)
+                    }
+                    context.startActivity(intent)
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Schedule, null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Setup Scheduling")
+            }
         }
     }
 }

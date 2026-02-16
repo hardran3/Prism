@@ -619,7 +619,7 @@ class ProcessTextActivity : ComponentActivity() {
                                     }
 
                                     androidx.compose.animation.AnimatedVisibility(
-                                        visible = showActionOptions && hasAlarmPermission,
+                                        visible = showActionOptions && vm.isSchedulingEnabled && hasAlarmPermission,
                                         enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
                                         exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End)
                                     ) {
@@ -727,6 +727,7 @@ class ProcessTextActivity : ComponentActivity() {
                                                     showActionOptions = false
                                                     vm.saveManualDraft()
                                                     Toast.makeText(this@ProcessTextActivity, "Draft saved!", Toast.LENGTH_SHORT).show()
+                                                    finish()
                                                 }
                                             },
                                             containerColor = if (canPost) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),

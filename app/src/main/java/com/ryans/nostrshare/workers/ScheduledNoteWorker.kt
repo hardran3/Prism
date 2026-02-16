@@ -140,7 +140,13 @@ class ScheduledNoteWorker(
                     val draft = dao.getDraftById(draftId)
                     if (draft != null) {
                         val eventId = try { org.json.JSONObject(signedJson).optString("id") } catch (_: Exception) { null }
-                        dao.insertDraft(draft.copy(isCompleted = true, publishError = null, publishedEventId = eventId, isOfflineRetry = false))
+                        dao.insertDraft(draft.copy(
+                            isCompleted = true, 
+                            publishError = null, 
+                            publishedEventId = eventId, 
+                            actualPublishedAt = System.currentTimeMillis(),
+                            isOfflineRetry = false
+                        ))
                     }
                 }
                 showNotification(true)

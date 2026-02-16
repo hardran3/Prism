@@ -50,6 +50,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        if (intent.getBooleanExtra("START_SCHEDULING_SETUP", false)) {
+            viewModel.startSchedulingOnboarding()
+        }
         
         setContent {
             NostrShareTheme {
