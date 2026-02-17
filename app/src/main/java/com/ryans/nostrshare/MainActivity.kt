@@ -46,14 +46,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        if (intent.getBooleanExtra("START_SCHEDULING_SETUP", false)) {
+            viewModel.startSchedulingOnboarding()
+        }
+        
+        val selectPubkey = intent.getStringExtra("SELECT_PUBKEY")
+        if (selectPubkey != null) {
+            viewModel.switchUser(selectPubkey)
+        }
+    }
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        if (intent.getBooleanExtra("START_SCHEDULING_SETUP", false)) {
-            viewModel.startSchedulingOnboarding()
-        }
+        handleIntent(intent)
         
         setContent {
             NostrShareTheme {

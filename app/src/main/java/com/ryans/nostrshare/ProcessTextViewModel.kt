@@ -173,6 +173,24 @@ class ProcessTextViewModel : ViewModel() {
             
         refreshUserProfile()
     }
+
+    fun switchUser(hexKey: String) {
+        if (pubkey == hexKey) return
+        
+        pubkey = hexKey
+        // Note: npub and signerPackageName are harder to "recover" without a proper multi-user DB,
+        // but for now we just want the UI to show the right notes.
+        // We'll try to find the cached profile
+        val cachedProfile = usernameCache[hexKey]
+        if (cachedProfile != null) {
+            userProfile = cachedProfile
+        }
+        
+        // Persist as active user
+        prefs.edit().putString("pubkey", hexKey).apply()
+        
+        refreshUserProfile()
+    }
     
 
     private fun refreshUserProfile() {

@@ -4,13 +4,23 @@ import android.content.Context
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import coil.ImageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
 import com.ryans.nostrshare.R
 import com.ryans.nostrshare.data.DraftDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 object NotificationHelper {
 
@@ -77,15 +87,47 @@ object NotificationHelper {
                             val pk = group.pubkey ?: "Unknown"
                             val hash = pk.hashCode()
                             
-                            val username = userCache[pk]?.name ?: pk.take(8)
+                            val profile = userCache[pk]
+                            val username = profile?.name ?: pk.take(8)
                             val noteText = if (group.count == 1) "1 note" else "${group.count} notes"
                             
+                            // Create Intent to open MainActivity with specific pubkey
+                            val intent = android.content.Intent(context, com.ryans.nostrshare.MainActivity::class.java).apply {
+                                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                putExtra("SELECT_PUBKEY", pk)
+                            }
+                            val pendingIntent = android.app.PendingIntent.getActivity(
+                                context,
+                                hash,
+                                intent,
+                                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                            )
+
+                            // Load Avatar Bitmap asynchronously
+                            val avatarBitmap = profile?.pictureUrl?.let { url ->
+                                try {
+                                    val loader = ImageLoader(context)
+                                    val request = ImageRequest.Builder(context)
+                                        .data(url)
+                                        .allowHardware(false) // Required for getting bitmap
+                                        .build()
+                                    val result = (loader.execute(request) as? SuccessResult)?.drawable
+                                    (result as? android.graphics.drawable.BitmapDrawable)?.bitmap?.let { 
+                                        getCircularBitmap(it)
+                                    }
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }
+
                             val individualBuilder = NotificationCompat.Builder(context, CHANNEL_ID_SCHEDULE)
                                 .setSmallIcon(R.drawable.ic_notification_prism)
                                 .setContentTitle(username)
                                 .setContentText("$noteText scheduled")
+                                .setLargeIcon(avatarBitmap) // Show user avatar
                                 .setPriority(NotificationCompat.PRIORITY_LOW)
                                 .setGroup(GROUP_KEY_SCHEDULED)
+                                .setContentIntent(pendingIntent) 
                                 .setSilent(true) 
                                 .setOngoing(true)
 
@@ -118,5 +160,20 @@ object NotificationHelper {
                 e.printStackTrace()
             }
         }
+    }
+
+    private fun getCircularBitmap(bitmap: Bitmap): Bitmap {
+        val size = Math.min(bitmap.width, bitmap.height)
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val paint = Paint()
+        val rect = Rect(0, 0, size, size)
+
+        paint.isAntiAlias = true
+        canvas.drawARGB(0, 0, 0, 0)
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(bitmap, rect, rect, paint)
+        return output
     }
 }
