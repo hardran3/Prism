@@ -1,10 +1,6 @@
 # Prism
 
 <p align="center">
-  <img src="app/src/main/res/drawable/ic_prism_triangle.xml" alt="Prism Logo" width="120" height="120" />
-</p>
-
-<p align="center">
   <strong>A lightweight, media-focused Nostr client for Android.</strong>
 </p>
 
@@ -39,28 +35,15 @@ Prism features a **Hybrid Trigger System** designed to bypass modern Android bat
 *   **Compression**: Configurable image compression to save bandwidth.
 *   **Direct Links**: Embedded media URLs in text are automatically detected, visualized, and counted.
 
-### 🔐 Fluid Security (NIP-55)
+### 🔐 Signing (NIP-55)
 *   **Background Signing**: Works with external signers (like Amber) to sign events in the background without screen flashing or app switching.
-*   **Multi-User**: Seamless account switching directly via user-specific notifications.
+*   **Multi-User**: Seamless account switching.
 
 ### 🎨 Polished UI/UX
 *   **Haptic Feedback**: Tactile response for interactions.
 *   **Highlights**: Visual vertical indicators for NIP-84 Highlight posts.
 *   **Custom Sounds**: Satisfying custom alert sound upon successful publishing.
 *   **Notifications**: Grouped notifications with avatars and deep-linking to your favorite Nostr client.
-
-## 🛠 Supported NIPs
-Prism implements the following Nostr standards:
-
-- **NIP-01**: Basic protocol flow (Text Notes).
-- **NIP-18**: Reposts & Quote Posts.
-- **NIP-19**: Bech32-encoded entities (`npub`, `note1`, etc.).
-- **NIP-20**: Command Results.
-- **NIP-22**: Comment / Video events.
-- **NIP-55**: Android Signer Intents (Background & Intent modes).
-- **NIP-84**: Highlights.
-- **NIP-94**: File Metadata.
-- **Blossom**: HTTP Blob Storage.
 
 ## 🚀 Getting Started
 
