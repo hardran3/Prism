@@ -32,6 +32,12 @@ class NostrShareApp : Application(), ImageLoaderFactory {
                 add(VideoFrameDecoder.Factory())
             }
             .okHttpClient(client)
+            .diskCache {
+                coil.disk.DiskCache.Builder()
+                    .directory(filesDir.resolve("image_cache"))
+                    .maxSizeBytes(100L * 1024 * 1024) // 100MB Limit
+                    .build()
+            }
             .crossfade(true)
             .build()
     }

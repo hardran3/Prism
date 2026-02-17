@@ -161,7 +161,7 @@ fun SettingsScreen(
             
             when (selectedTabIndex) {
                 0 -> GeneralSettingsTab(repo)
-                1 -> NostrSettingsTab(repo)
+                1 -> NostrSettingsTab(repo, viewModel.pubkey)
                 2 -> BlossomSettingsTab(repo, viewModel, onLogin)
                 3 -> AboutSettingsTab(repo)
             }
@@ -281,10 +281,10 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
 }
 
 @Composable
-fun NostrSettingsTab(repo: SettingsRepository) {
-    var alwaysKind1 by remember { mutableStateOf(repo.isAlwaysUseKind1()) }
-    var blastrEnabled by remember { mutableStateOf(repo.isBlastrEnabled()) }
-    var citrineRelayEnabled by remember { mutableStateOf(repo.isCitrineRelayEnabled()) }
+fun NostrSettingsTab(repo: SettingsRepository, pubkey: String?) {
+    var alwaysKind1 by remember { mutableStateOf(repo.isAlwaysUseKind1(pubkey)) }
+    var blastrEnabled by remember { mutableStateOf(repo.isBlastrEnabled(pubkey)) }
+    var citrineRelayEnabled by remember { mutableStateOf(repo.isCitrineRelayEnabled(pubkey)) }
     
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
@@ -310,7 +310,7 @@ fun NostrSettingsTab(repo: SettingsRepository) {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     }
                     alwaysKind1 = it
-                    repo.setAlwaysUseKind1(it)
+                    repo.setAlwaysUseKind1(it, pubkey)
                 }
             )
         }
@@ -333,7 +333,7 @@ fun NostrSettingsTab(repo: SettingsRepository) {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     }
                     blastrEnabled = it
-                    repo.setBlastrEnabled(it)
+                    repo.setBlastrEnabled(it, pubkey)
                 }
             )
         }
@@ -356,7 +356,7 @@ fun NostrSettingsTab(repo: SettingsRepository) {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     }
                     citrineRelayEnabled = it
-                    repo.setCitrineRelayEnabled(it)
+                    repo.setCitrineRelayEnabled(it, pubkey)
                 }
             )
         }
@@ -414,7 +414,7 @@ fun BlossomSettingsTab(
     viewModel: SettingsViewModel,
     onLogin: () -> Unit
 ) {
-    var servers by remember { mutableStateOf(repo.getBlossomServers()) }
+    var servers by remember { mutableStateOf(repo.getBlossomServers(viewModel.pubkey)) }
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(0f) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -470,7 +470,7 @@ fun BlossomSettingsTab(
                                         val item = newServers.removeAt(currentIdx)
                                         newServers.add(currentIdx + 1, item)
                                         servers = newServers
-                                        repo.setBlossomServers(newServers)
+                                        repo.setBlossomServers(newServers, viewModel.pubkey)
                                         draggingItemIndex = currentIdx + 1
                                         // Subtract the distance moved to keep item under finger
                                         dragOffset -= threshold + 20f 
@@ -482,7 +482,7 @@ fun BlossomSettingsTab(
                                         val item = newServers.removeAt(currentIdx)
                                         newServers.add(currentIdx - 1, item)
                                         servers = newServers
-                                        repo.setBlossomServers(newServers)
+                                        repo.setBlossomServers(newServers, viewModel.pubkey)
                                         draggingItemIndex = currentIdx - 1
                                         // Add back the distance moved
                                         dragOffset += threshold + 20f
@@ -509,12 +509,12 @@ fun BlossomSettingsTab(
                                 if (it.url == server.url) it.copy(enabled = enabled) else it 
                             }
                             servers = updated
-                            repo.setBlossomServers(updated)
+                            repo.setBlossomServers(updated, viewModel.pubkey)
                         },
                         onDelete = {
                             val updated = servers.filter { it.url != server.url }
                             servers = updated
-                            repo.setBlossomServers(updated)
+                            repo.setBlossomServers(updated, viewModel.pubkey)
                         },
                         repo = repo
                     )
@@ -586,7 +586,7 @@ fun BlossomSettingsTab(
                 val newServer = BlossomServer(url.trim(), true)
                 val updated = servers + newServer
                 servers = updated
-                repo.setBlossomServers(updated)
+                repo.setBlossomServers(updated, viewModel.pubkey)
                 showAddDialog = false
             }
         )

@@ -41,8 +41,19 @@ class SettingsRepository(private val appContext: Context) {
     fun isSchedulingEnabled(): Boolean = prefs.getBoolean("scheduling_enabled", false)
     fun setSchedulingEnabled(enabled: Boolean) = prefs.edit().putBoolean("scheduling_enabled", enabled).apply()
 
-    fun isAlwaysUseKind1(): Boolean = prefs.getBoolean("always_kind_1", false)
-    fun setAlwaysUseKind1(enabled: Boolean) = prefs.edit().putBoolean("always_kind_1", enabled).apply()
+    fun isAlwaysUseKind1(pubkey: String? = null): Boolean {
+        val key = if (pubkey != null) "${pubkey}_always_kind_1" else "always_kind_1"
+        return if (pubkey != null && !prefs.contains(key)) {
+            prefs.getBoolean("always_kind_1", false) // Fallback
+        } else {
+            prefs.getBoolean(key, false)
+        }
+    }
+    
+    fun setAlwaysUseKind1(enabled: Boolean, pubkey: String? = null) {
+        val key = if (pubkey != null) "${pubkey}_always_kind_1" else "always_kind_1"
+        prefs.edit().putBoolean(key, enabled).apply()
+    }
 
     fun isOptimizeMediaEnabled(): Boolean = getCompressionLevel() != COMPRESSION_NONE
     fun setOptimizeMediaEnabled(enabled: Boolean) = setCompressionLevel(if (enabled) COMPRESSION_MEDIUM else COMPRESSION_NONE)
@@ -50,19 +61,50 @@ class SettingsRepository(private val appContext: Context) {
     fun getCompressionLevel(): Int = prefs.getInt("compression_level", COMPRESSION_MEDIUM)
     fun setCompressionLevel(level: Int) = prefs.edit().putInt("compression_level", level).apply()
 
-    fun isBlastrEnabled(): Boolean = prefs.getBoolean("blastr_enabled", true)
-    fun setBlastrEnabled(enabled: Boolean) = prefs.edit().putBoolean("blastr_enabled", enabled).apply()
+    fun isBlastrEnabled(pubkey: String? = null): Boolean {
+        val key = if (pubkey != null) "${pubkey}_blastr_enabled" else "blastr_enabled"
+        return if (pubkey != null && !prefs.contains(key)) {
+            prefs.getBoolean("blastr_enabled", true) // Fallback
+        } else {
+            prefs.getBoolean(key, true)
+        }
+    }
+
+    fun setBlastrEnabled(enabled: Boolean, pubkey: String? = null) {
+        val key = if (pubkey != null) "${pubkey}_blastr_enabled" else "blastr_enabled"
+        prefs.edit().putBoolean(key, enabled).apply()
+    }
 
     fun isHapticEnabled(): Boolean = prefs.getBoolean("haptic_enabled", true)
     fun setHapticEnabled(enabled: Boolean) = prefs.edit().putBoolean("haptic_enabled", enabled).apply()
 
-    fun isCitrineRelayEnabled(): Boolean = prefs.getBoolean("citrine_relay_enabled", false)
-    fun setCitrineRelayEnabled(enabled: Boolean) = prefs.edit().putBoolean("citrine_relay_enabled", enabled).apply()
+    fun isCitrineRelayEnabled(pubkey: String? = null): Boolean {
+        val key = if (pubkey != null) "${pubkey}_citrine_relay_enabled" else "citrine_relay_enabled"
+        return if (pubkey != null && !prefs.contains(key)) {
+            prefs.getBoolean("citrine_relay_enabled", false) // Fallback
+        } else {
+            prefs.getBoolean(key, false)
+        }
+    }
 
-    fun getBlossomServers(): List<BlossomServer> {
-        val jsonString = prefs.getString("blossom_servers_json", null)
+    fun setCitrineRelayEnabled(enabled: Boolean, pubkey: String? = null) {
+        val key = if (pubkey != null) "${pubkey}_citrine_relay_enabled" else "citrine_relay_enabled"
+        prefs.edit().putBoolean(key, enabled).apply()
+    }
+
+    fun getBlossomServers(pubkey: String? = null): List<BlossomServer> {
+        val key = if (pubkey != null) "${pubkey}_blossom_servers_json" else "blossom_servers_json"
+        
+        // Try precise key first
+        var jsonString = prefs.getString(key, null)
+        
+        // Fallback to global if specific key missing and we have a pubkey
+        if (jsonString == null && pubkey != null) {
+             jsonString = prefs.getString("blossom_servers_json", null)
+        }
+
         if (jsonString == null) {
-             // Suggestions for new users only
+             // Suggestions for new users only (if truly nothing found anywhere)
              return if (!isOnboarded()) onboardDefaults else defaultServers
         }
         
@@ -79,7 +121,8 @@ class SettingsRepository(private val appContext: Context) {
         return list
     }
     
-    fun setBlossomServers(servers: List<BlossomServer>) {
+    fun setBlossomServers(servers: List<BlossomServer>, pubkey: String? = null) {
+        val key = if (pubkey != null) "${pubkey}_blossom_servers_json" else "blossom_servers_json"
         val array = org.json.JSONArray()
         servers.forEach { 
             val obj = org.json.JSONObject()
@@ -87,12 +130,12 @@ class SettingsRepository(private val appContext: Context) {
             obj.put("enabled", it.enabled)
             array.put(obj)
         }
-        prefs.edit().putString("blossom_servers_json", array.toString()).apply()
+        prefs.edit().putString(key, array.toString()).apply()
     }
     
     // Helper for VM
-    fun getEnabledBlossomServers(): List<String> {
-        return getBlossomServers().filter { it.enabled }.map { it.url }
+    fun getEnabledBlossomServers(pubkey: String? = null): List<String> {
+        return getBlossomServers(pubkey).filter { it.enabled }.map { it.url }
     }
 
     fun getFollowedPubkeys(): Set<String> {

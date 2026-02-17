@@ -6,8 +6,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
+import okhttp3.MultipartBody
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import okio.source
 import java.io.InputStream
 import java.security.MessageDigest
 import org.json.JSONObject
@@ -81,10 +85,17 @@ class BlossomClient(private val client: OkHttpClient) {
         return digest.digest(data).joinToString("") { "%02x".format(it) }
     }
 
-    suspend fun upload(context: Context, data: ByteArray, signedAuthEvent: String, server: String, mimeType: String?): UploadResult = withContext(Dispatchers.IO) {
+    suspend fun upload(
+        context: Context, 
+        data: ByteArray?, 
+        uri: Uri?, 
+        signedAuthEvent: String, 
+        server: String, 
+        mimeType: String?
+    ): UploadResult = withContext(Dispatchers.IO) {
         try {
             val mediaType = (mimeType ?: "application/octet-stream").toMediaTypeOrNull()
-            
+
             // Clean up the signed event and base64 encode it
             val cleanedAuth = signedAuthEvent.trim()
             val authHeader = "Nostr " + android.util.Base64.encodeToString(cleanedAuth.toByteArray(), android.util.Base64.NO_WRAP)
@@ -92,16 +103,46 @@ class BlossomClient(private val client: OkHttpClient) {
             var lastError = ""
             val cleanServer = server.removeSuffix("/")
 
+            // Helper to get fresh stream & length
+            fun getRequestBody(): RequestBody {
+                return if (uri != null) {
+                    val contentResolver = context.contentResolver
+                    val length = try {
+                        contentResolver.openFileDescriptor(uri, "r")?.statSize ?: -1L
+                    } catch (e: Exception) { -1L }
+                    
+                    object : RequestBody() {
+                        override fun contentType() = mediaType
+                        override fun contentLength() = length
+                        override fun writeTo(sink: okio.BufferedSink) {
+                            contentResolver.openInputStream(uri)?.use { source ->
+                                sink.writeAll(source.source())
+                            }
+                        }
+                    }
+                } else {
+                    (data ?: ByteArray(0)).toRequestBody(mediaType)
+                }
+            }
+            
+            fun getLength(): Long {
+                 if (uri != null) {
+                    return try {
+                        context.contentResolver.openFileDescriptor(uri, "r")?.statSize ?: -1L
+                    } catch (e: Exception) { -1L }
+                 }
+                 return data?.size?.toLong() ?: 0L
+            }
+
             // Strategy 1: PUT /upload (Amethyst Alignment)
             try {
-                val requestBody = data.toRequestBody(mediaType)
                 val request = Request.Builder()
                     .url("$cleanServer/upload")
-                    .put(requestBody)
+                    .put(getRequestBody())
                     .header("Authorization", authHeader)
                     .header("Content-Type", mimeType ?: "application/octet-stream")
-                    .header("Content-Length", data.size.toString())
-                    .header("User-Agent", "Prism/1.0") 
+                    .header("Content-Length", getLength().toString())
+                    .header("User-Agent", "Prism/1.0")
                     .build()
 
                 val response = client.newCall(request).execute()
@@ -121,15 +162,16 @@ class BlossomClient(private val client: OkHttpClient) {
                 lastError = "PUT /upload error: ${e.message}"
             }
 
-            // Strategy 2: POST /upload (Fallback)
-            try {
-                val requestBody = data.toRequestBody(mediaType)
+            // Strategy 2: POST /upload (Upload via Form Data) - Only use if small enough or strict fallback
+            // NOTE: MultiPart is hard to stream with OkHttp standard api without creating custom body, 
+            // skipping for large files if PUT failed, or trying raw POST.
+            // Let's try raw POST /upload similar to PUT
+             try {
                 val request = Request.Builder()
                     .url("$cleanServer/upload")
-                    .post(requestBody)
+                    .post(getRequestBody())
                     .header("Authorization", authHeader)
-                    .header("Content-Type", mimeType ?: "application/octet-stream")
-                    .header("Content-Length", data.size.toString())
+                    .header("Content-Type", mimeType ?: "application/octet-stream") 
                     .header("User-Agent", "Prism/1.0")
                     .build()
 
@@ -142,37 +184,41 @@ class BlossomClient(private val client: OkHttpClient) {
                         ?: extractHashFromUrl(urlRes)
                     return@withContext UploadResult(urlRes, serverHash)
                 } else {
-                     val body = response.body?.string() ?: "No body"
-                     lastError += " | POST /upload failed (${response.code}): $body"
-                     response.close()
+                    response.close()
                 }
             } catch (e: Exception) {
-                lastError += " | POST /upload error: ${e.message}"
+                 // Ignore
             }
 
-            // Strategy 3: PUT /media (Standard Blossom /media endpoint)
-            val requestBody2 = data.toRequestBody(mediaType)
-            val request2 = Request.Builder()
-                .url("$cleanServer/media")
-                .put(requestBody2)
-                .header("Authorization", authHeader)
-                .header("Content-Type", mimeType ?: "application/octet-stream")
-                .header("Content-Length", data.size.toString())
-                .header("User-Agent", "Prism/1.0")
-                .build()
-
-            val response2 = client.newCall(request2).execute()
-            if (!response2.isSuccessful) {
-                 val body = response2.body?.string() ?: "No body"
-                 throw Exception("$lastError | PUT /media failed (${response2.code}): $body")
+            // Strategy 3: PUT /media (Blossom Spec)
+            try {
+                val request = Request.Builder()
+                    .url("$cleanServer/media")
+                    .put(getRequestBody())
+                    .header("Authorization", authHeader)
+                    .header("Content-Type", mimeType ?: "application/octet-stream")
+                    .header("Content-Length", getLength().toString())
+                    .header("User-Agent", "Prism/1.0")
+                    .build()
+                
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: throw Exception("Empty response")
+                    val json = JSONObject(responseBody)
+                    val urlRes = json.optString("url")
+                    val serverHash = json.optString("sha256").takeIf { it.isNotBlank() }
+                        ?: extractHashFromUrl(urlRes)
+                    return@withContext UploadResult(urlRes, serverHash)
+                } else {
+                    val body = response.body?.string() ?: "No body"
+                    lastError = "PUT /media failed (${response.code}): $body"
+                    response.close()
+                }
+            } catch (e: Exception) {
+                lastError = "PUT /media error: ${e.message}"
             }
-            
-            val responseBody = response2.body?.string() ?: throw Exception("Empty response")
-            val json = JSONObject(responseBody)
-            val url = json.optString("url")
-            val serverHash = json.optString("sha256").takeIf { it.isNotBlank() }
-                ?: extractHashFromUrl(url)
-            return@withContext UploadResult(url, serverHash)
+
+            throw Exception("Upload failed: $lastError")
 
         } catch (e: Exception) {
             throw e

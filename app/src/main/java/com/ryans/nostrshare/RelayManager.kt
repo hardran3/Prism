@@ -12,6 +12,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import android.util.Log
 
 class RelayManager(
@@ -33,7 +34,7 @@ class RelayManager(
         val relayList = mutableSetOf<String>()
         val latch = CountDownLatch(1) // Wait for at least one valid response or timeout
 
-        if (settingsRepository.isBlastrEnabled()) {
+        if (settingsRepository.isBlastrEnabled(pubkey)) {
             relayList.add("wss://sendit.nosflare.com/")
         }
 
@@ -174,13 +175,13 @@ class RelayManager(
     }
 
     suspend fun fetchUserProfile(pubkey: String): UserProfile? = withContext(Dispatchers.IO) {
-        var profile: UserProfile? = null
+        val result = java.util.concurrent.atomic.AtomicReference<UserProfile?>(null)
+        val latch = CountDownLatch(1)
+        val checkedRelays = java.util.Collections.synchronizedSet(HashSet<String>())
         
-        // Use indexers for metadata lookups
-        val targetRelays = indexerRelays + bootstrapRelays
-        val latch = CountDownLatch(targetRelays.size)
-
-        for (url in targetRelays) {
+        fun search(url: String) {
+            if (!checkedRelays.add(url)) return
+            
             val request = Request.Builder().url(url).build()
             val listener = object : WebSocketListener() {
                 val subId = UUID.randomUUID().toString()
@@ -205,19 +206,18 @@ class RelayManager(
                             val event = json.getJSONObject(2)
                             try {
                                 val content = JSONObject(event.optString("content"))
-                                synchronized(this@RelayManager) {
-                                    profile = UserProfile(
-                                        name = content.optString("name").ifEmpty { content.optString("display_name") },
-                                        pictureUrl = content.optString("picture"),
-                                        lud16 = content.optString("lud16")
-                                    )
+                                val profile = UserProfile(
+                                    name = content.optString("name").ifEmpty { content.optString("display_name") },
+                                    pictureUrl = content.optString("picture"),
+                                    lud16 = content.optString("lud16")
+                                )
+                                if (result.compareAndSet(null, profile)) {
+                                    latch.countDown()
                                 }
                             } catch (_: Exception) {}
                             webSocket.close(1000, "Done")
-                            latch.countDown()
                         } else if (type == "EOSE" && json.optString(1) == subId) {
                             webSocket.close(1000, "EOSE")
-                            latch.countDown()
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -225,18 +225,31 @@ class RelayManager(
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    webSocket.close(1000, "Failure") // Explicitly close on failure
-                    latch.countDown()
+                    // Fail silently
                 }
             }
             client.newWebSocket(request, listener)
+        }
+
+        // 1. Race bootstrap + indexers immediately
+        val targetRelays = (indexerRelays + bootstrapRelays).distinct()
+        targetRelays.forEach { search(it) }
+        
+        // 2. Async: Fetch Author NIP-65 Relays and race them too
+        launch {
+            try {
+                val authorRelays = fetchRelayList(pubkey)
+                authorRelays.forEach { search(it) }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
         
         try {
             latch.await(5, TimeUnit.SECONDS)
         } catch (_: InterruptedException) { }
         
-        return@withContext profile
+        return@withContext result.get()
     }
     
     suspend fun fetchUserProfiles(
@@ -454,13 +467,17 @@ class RelayManager(
         return@withContext follows
     }
 
-    suspend fun fetchEvent(eventId: String, relays: List<String> = emptyList()): JSONObject? = withContext(Dispatchers.IO) {
+    suspend fun fetchEvent(eventId: String, relays: List<String> = emptyList(), authorPubkey: String? = null): JSONObject? = withContext(Dispatchers.IO) {
         eventCache[eventId]?.let { return@withContext it }
-        val relayList = if (relays.isNotEmpty()) relays else bootstrapRelays
+        
+        val result = java.util.concurrent.atomic.AtomicReference<JSONObject?>(null)
         val latch = CountDownLatch(1)
-        var result: JSONObject? = null
-
-        for (url in relayList) {
+        val checkedRelays = java.util.Collections.synchronizedSet(HashSet<String>())
+        
+        // Helper to launch a search on a specific relay
+        fun search(url: String) {
+            if (!checkedRelays.add(url)) return
+            
             val request = Request.Builder().url(url).build()
             val listener = object : WebSocketListener() {
                 val subId = UUID.randomUUID().toString()
@@ -482,12 +499,13 @@ class RelayManager(
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
                             val event = json.getJSONObject(2)
-                            synchronized(this@RelayManager) { // Synchronize on the outer class instance
-                                result = event
-                                eventCache[eventId] = event
+                            if (result.compareAndSet(null, event)) {
+                                synchronized(this@RelayManager) {
+                                    eventCache[eventId] = event
+                                }
+                                latch.countDown()
                             }
                             webSocket.close(1000, "Done")
-                            latch.countDown()
                         } else if (type == "EOSE" && json.optString(1) == subId) {
                            webSocket.close(1000, "EOSE")
                         }
@@ -503,21 +521,40 @@ class RelayManager(
             client.newWebSocket(request, listener)
         }
         
+        // 1. Race provided relays + bootstrap + indexers immediately
+        val initialRelays = (relays + bootstrapRelays + indexerRelays).distinct()
+        initialRelays.forEach { search(it) }
+        
+        // 2. Async: Fetch Author NIP-65 Relays and race them too
+        if (authorPubkey != null) {
+            launch {
+                try {
+                    val authorRelays = fetchRelayList(authorPubkey)
+                    authorRelays.forEach { search(it) }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+        
         try {
             latch.await(5, TimeUnit.SECONDS)
         } catch (e: InterruptedException) { }
         
-        return@withContext result
+        return@withContext result.get()
     }
 
     suspend fun fetchAddress(kind: Int, pubkey: String, identifier: String, relays: List<String> = emptyList()): JSONObject? = withContext(Dispatchers.IO) {
         val cacheKey = "$kind:$pubkey:$identifier"
         eventCache[cacheKey]?.let { return@withContext it }
-        val relayList = if (relays.isNotEmpty()) relays else bootstrapRelays
+        
+        val result = java.util.concurrent.atomic.AtomicReference<JSONObject?>(null)
         val latch = CountDownLatch(1)
-        var result: JSONObject? = null
-
-        for (url in relayList) {
+        val checkedRelays = java.util.Collections.synchronizedSet(HashSet<String>())
+        
+        fun search(url: String) {
+            if (!checkedRelays.add(url)) return
+            
             val request = Request.Builder().url(url).build()
             val listener = object : WebSocketListener() {
                 val subId = UUID.randomUUID().toString()
@@ -542,12 +579,13 @@ class RelayManager(
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
                             val event = json.getJSONObject(2)
-                            synchronized(this@RelayManager) { // Synchronize on the outer class instance
-                                result = event
-                                eventCache[cacheKey] = event
+                             if (result.compareAndSet(null, event)) {
+                                synchronized(this@RelayManager) {
+                                    eventCache[cacheKey] = event
+                                }
+                                latch.countDown()
                             }
                             webSocket.close(1000, "Done")
-                            latch.countDown()
                         } else if (type == "EOSE" && json.optString(1) == subId) {
                            webSocket.close(1000, "EOSE")
                         }
@@ -562,11 +600,25 @@ class RelayManager(
             client.newWebSocket(request, listener)
         }
         
+        // 1. Race provided relays + bootstrap + indexers
+        val initialRelays = (relays + bootstrapRelays + indexerRelays).distinct()
+        initialRelays.forEach { search(it) }
+        
+        // 2. Async: Fetch Author NIP-65 (We always know author for address)
+        launch {
+            try {
+                val authorRelays = fetchRelayList(pubkey)
+                authorRelays.forEach { search(it) }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        
         try {
             latch.await(5, TimeUnit.SECONDS)
         } catch (e: InterruptedException) { }
         
-        return@withContext result
+        return@withContext result.get()
     }
     
     suspend fun searchUsers(query: String): List<Pair<String, UserProfile>> = withContext(Dispatchers.IO) {

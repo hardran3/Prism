@@ -136,7 +136,7 @@ class ProcessTextViewModel : ViewModel() {
         }
         
         // Initialize Blossom servers
-        blossomServers = settingsRepository.getBlossomServers()
+        blossomServers = settingsRepository.getBlossomServers(pubkey)
         
         if (!isOnboarded) {
             currentOnboardingStep = OnboardingStep.WELCOME
@@ -185,6 +185,9 @@ class ProcessTextViewModel : ViewModel() {
         if (cachedProfile != null) {
             userProfile = cachedProfile
         }
+        
+        // Reload scoped settings for this user
+        blossomServers = settingsRepository.getBlossomServers(hexKey)
         
         // Persist as active user
         prefs.edit().putString("pubkey", hexKey).apply()
@@ -238,11 +241,16 @@ class ProcessTextViewModel : ViewModel() {
             try {
                 isSyncingServers = true
                 val discoveredUrls = relayManager.fetchBlossomServerList(pk)
+                
+                // Get existing local state to preserve "enabled" toggles
+                val existingLocal = settingsRepository.getBlossomServers(pk).associate { it.url to it.enabled }
+                
                 if (discoveredUrls.isNotEmpty()) {
-                    // Replace local list with truth from relay
+                    // Replace local list with truth from relay, but keep enabled state
                     val newServers = discoveredUrls.map { url ->
                         val cleanUrl = url.trim().removeSuffix("/")
-                        BlossomServer(cleanUrl, true)
+                        val isEnabled = existingLocal[cleanUrl] ?: true // Default to true if new
+                        BlossomServer(cleanUrl, isEnabled)
                     }
                     
                     blossomServers = newServers
@@ -260,7 +268,7 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun saveServersAndContinue(servers: List<BlossomServer>) {
-        settingsRepository.setBlossomServers(servers)
+        settingsRepository.setBlossomServers(servers, pubkey)
         blossomServers = servers
         currentOnboardingStep = OnboardingStep.SCHEDULING_CONFIG
     }
@@ -339,7 +347,7 @@ class ProcessTextViewModel : ViewModel() {
                         val event = if (entity.type == "naddr") {
                             relayManager.fetchAddress(entity.kind!!, entity.author!!, entity.id, entity.relays)
                         } else {
-                            relayManager.fetchEvent(entity.id, entity.relays)
+                            relayManager.fetchEvent(entity.id, entity.relays, entity.author)
                         }
                         
                         if (event != null) {
@@ -369,14 +377,20 @@ class ProcessTextViewModel : ViewModel() {
                             val authorPubkey = event.optString("pubkey")
                             if (authorPubkey.isNotEmpty()) {
                                 val profile = relayManager.fetchUserProfile(authorPubkey)
-                                profile?.name ?: authorPubkey.take(8)
+                                if (profile != null) {
+                                    highlightAuthorName = profile.name
+                                    highlightAuthorUrl = profile.pictureUrl
+                                } else {
+                                    highlightAuthorName = authorPubkey.take(8)
+                                    highlightAuthorUrl = null
+                                }
                                 sourceUrl = "nostr:${entity.bech32}"
                                 
                                 // Store NIP-84 Metadata
                                 highlightEventId = event.optString("id")
                                 highlightAuthor = authorPubkey
                                 highlightKind = event.optInt("kind", 1)
-                                highlightIdentifier = if (entity.type == "naddr") entity.id else null
+    var highlightIdentifier = if (entity.type == "naddr") entity.id else null
                                 highlightRelays.clear()
                                 highlightRelays.addAll(entity.relays)
                                 
@@ -398,6 +412,10 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     var publishSuccess by mutableStateOf<Boolean?>(null) // null = idle/publishing, true = success, false = failed
+
+    // Highlight Metadata Display
+    var highlightAuthorName by mutableStateOf<String?>(null)
+    var highlightAuthorUrl by mutableStateOf<String?>(null)
 
     private val blossomClient by lazy { BlossomClient(NostrShareApp.getInstance().client) }
     
@@ -604,7 +622,7 @@ class ProcessTextViewModel : ViewModel() {
         }
     }
     fun onHighlightShared() {
-        if (!settingsRepository.isAlwaysUseKind1()) {
+        if (!settingsRepository.isAlwaysUseKind1(pubkey)) {
             setKind(PostKind.HIGHLIGHT)
         }
     }
@@ -936,16 +954,7 @@ class ProcessTextViewModel : ViewModel() {
             item.status = "Uploading to ${servers.size} server(s)..."
             item.isUploading = true
             
-            // Read file into memory ONCE to guarantee bit-perfect consistency
-            val fileBytes = try {
-                NostrShareApp.getInstance().contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            } catch (e: Exception) {
-                item.status = "Failed to read media: ${e.message}"
-                item.isUploading = false
-                null
-            } ?: return@launch
-
-            // Upload to ALL servers in parallel
+            // Upload to ALL servers in parallel using STREAMING (no huge memory buffers)
             val serverResults = mutableListOf<Pair<String, Boolean>>()
             val successfulUrls = mutableMapOf<String, String>()
             val serverHashes = mutableMapOf<String, String?>()
@@ -956,7 +965,8 @@ class ProcessTextViewModel : ViewModel() {
                         try {
                             val result = blossomClient.upload(
                                 NostrShareApp.getInstance(),
-                                fileBytes,
+                                null, // No ByteArray data
+                                uri,  // Stream from URI
                                 signedAuthEvent,
                                 server,
                                 item.mimeType
@@ -1538,7 +1548,7 @@ class ProcessTextViewModel : ViewModel() {
                     }
                     
                     val combinedRelays = mutableListOf<String>().apply { addAll(baseRelays) }
-                    if (settingsRepository.isCitrineRelayEnabled()) {
+                    if (settingsRepository.isCitrineRelayEnabled(pubkey)) {
                         combinedRelays.add("ws://localhost:4869")
                     }
                     combinedRelays.distinct() // Ensure no duplicate relays
@@ -1651,7 +1661,7 @@ class ProcessTextViewModel : ViewModel() {
                 }
                 
                 val combinedRelays = mutableListOf<String>().apply { addAll(baseRelays) }
-                if (settingsRepository.isCitrineRelayEnabled()) {
+                if (settingsRepository.isCitrineRelayEnabled(pubkey)) {
                     combinedRelays.add("ws://localhost:4869")
                 }
                 
@@ -1737,9 +1747,13 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun resolveUsername(npub: String) {
-        val entity = NostrUtils.findNostrEntity(npub) ?: return
-        if (entity.type != "npub" && entity.type != "nprofile") return
-        val pubkey = entity.id
+        val pubkey = if (npub.length == 64 && npub.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+            npub
+        } else {
+            val entity = NostrUtils.findNostrEntity(npub) ?: return
+            if (entity.type != "npub" && entity.type != "nprofile") return
+            entity.id
+        }
         
         if (usernameCache.containsKey(pubkey) && usernameCache[pubkey]?.name != null) return
         

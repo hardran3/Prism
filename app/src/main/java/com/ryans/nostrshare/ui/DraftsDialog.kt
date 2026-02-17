@@ -80,6 +80,7 @@ fun DraftsDialog(
 @Composable
 fun DraftsHistoryContent(
     vm: ProcessTextViewModel,
+    initialTab: Int = 0,
     onEditDraft: (Draft) -> Unit,
     onEditAndReschedule: (Draft) -> Unit,
     onSaveToDrafts: (Draft) -> Unit,
@@ -88,7 +89,7 @@ fun DraftsHistoryContent(
     val drafts by vm.drafts.collectAsState(initial = emptyList<Draft>())
     val allScheduled by vm.allScheduled.collectAsState(initial = emptyList<Draft>())
     val scheduledHistory by vm.scheduledHistory.collectAsState(initial = emptyList<Draft>())
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab) }
     var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -797,22 +798,25 @@ fun MediaThumbnailRow(mediaItems: List<MediaUploadState>, onMediaClick: (MediaUp
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                     .clickable { onMediaClick(item) }
             ) {
-                AsyncImage(
-                    model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                        .data(model)
-                        .videoFrameMillis(2000)
-                        .build(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-                
+                // STATIC ICON FOR VIDEOS (No Coil/Download)
                 if (item.mimeType?.startsWith("video/") == true) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
+                     Box(
+                         modifier = Modifier.fillMaxSize(),
+                         contentAlignment = Alignment.Center
+                     ) {
+                         Icon(
+                             imageVector = Icons.Default.PlayArrow,
+                             contentDescription = "Video",
+                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                             modifier = Modifier.size(24.dp)
+                         )
+                     }
+                } else {
+                    AsyncImage(
+                        model = model,
                         contentDescription = null,
-                        tint = androidx.compose.ui.graphics.Color.White,
-                        modifier = Modifier.align(Alignment.Center).size(24.dp)
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
                     )
                 }
             }

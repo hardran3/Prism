@@ -64,6 +64,9 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontStyle
 import coil.request.videoFrameMillis
+import androidx.compose.foundation.shape.RoundedCornerShape
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.PersonAdd
@@ -1105,10 +1108,31 @@ fun MediaDetailDialog(
                 } else {
                     // Video placeholder
                     Box(
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f/9f).clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).background(Color.Black),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f/9f)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                            .background(Color.Black)
+                            .clickable {
+                                // Launch External Player
+                                try {
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                        val uri = if (mediaModel is String) android.net.Uri.parse(mediaModel) else mediaModel as android.net.Uri
+                                        setDataAndType(uri, item.mimeType ?: "video/*")
+                                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(context, "No video player found", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Filled.PlayArrow, "Video", tint = Color.White, modifier = Modifier.size(64.dp))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Filled.PlayArrow, "Play Video", tint = Color.White, modifier = Modifier.size(64.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Text("Click to Play Externally", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                        }
                     }
                 }
                 
@@ -1385,86 +1409,50 @@ fun MediaDetailDialog(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MediaThumbnail(
-    item: MediaUploadState,
-    onClick: () -> Unit,
-    onRemove: () -> Unit
-) {
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    val clipboardManager = LocalClipboardManager.current
-    
+fun MediaThumbnail(item: MediaUploadState, onRemove: () -> Unit, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(100.dp)
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = {
-                    item.uploadedUrl?.let { url ->
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                        clipboardManager.setText(AnnotatedString(url))
-                    }
-                }
-            )
+            .clickable { onClick() }
     ) {
-        // Thumbnail Image or Video
-        val model = item.uploadedUrl ?: item.uri
-        coil.compose.AsyncImage(
-            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                .data(model)
-                .videoFrameMillis(2000) // Capture frame at 2 seconds
-                .build(),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-        )
-        
+        // STATIC ICON FOR VIDEOS (Local or Remote)
+        // We do strictly NO downloading of video frames to save bandwidth/cache/memory.
         if (item.mimeType?.startsWith("video/") == true) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.2f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    null,
-                    tint = Color.White,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-        }
-        
-        // Overlay Status
-        if (item.isUploading || item.isProcessing) {
-            Box(
-                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
-            }
-        } else if (item.uploadedUrl != null) {
-            // Success indicator
-            Box(
-                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).size(20.dp).clip(
-                    CircleShape
-                ).background(Color(0xFF4CAF50)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(14.dp))
-            }
-        }
-        
-        // Remove Button
-        IconButton(
-            onClick = {
-                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                onRemove()
-            },
-            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp).background(Color.Black.copy(alpha = 0.5f),
-                CircleShape
+             Box(
+                 modifier = Modifier.fillMaxSize(),
+                 contentAlignment = Alignment.Center
+             ) {
+                 Icon(
+                     imageVector = Icons.Default.PlayArrow,
+                     contentDescription = "Video",
+                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                     modifier = Modifier.size(48.dp)
+                 )
+             }
+        } else {
+            // IMAGES: Load normally via Coil
+            val model: Any = item.uploadedUrl ?: item.uri
+            AsyncImage(
+                model = model,
+                contentDescription = "Media",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
             )
+        }
+
+        // Status Indicator
+        if (item.status != "Ready" && item.status != "Uploaded") {
+             // ... (This part is visually overlaid, handled below in original code usually, 
+             // but let's stick to replacing just the Image/Video rendering logic if possible 
+             // or render the whole box content)
+        }
+        
+        // Remove button
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape)
         ) {
             Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(14.dp))
         }

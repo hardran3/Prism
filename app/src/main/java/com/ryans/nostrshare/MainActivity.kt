@@ -51,6 +51,8 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    private var initialTab by mutableIntStateOf(0)
+
     private fun handleIntent(intent: Intent) {
         if (intent.getBooleanExtra("START_SCHEDULING_SETUP", false)) {
             viewModel.startSchedulingOnboarding()
@@ -59,6 +61,11 @@ class MainActivity : ComponentActivity() {
         val selectPubkey = intent.getStringExtra("SELECT_PUBKEY")
         if (selectPubkey != null) {
             viewModel.switchUser(selectPubkey)
+        }
+
+        val openTab = intent.getIntExtra("OPEN_TAB", -1)
+        if (openTab != -1) {
+            initialTab = openTab
         }
     }
 
@@ -157,6 +164,7 @@ class MainActivity : ComponentActivity() {
                             Box(modifier = Modifier.padding(padding)) {
                                 DraftsHistoryContent(
                                     vm = viewModel,
+                                    initialTab = initialTab,
                                     onEditDraft = { draft ->
                                         val intent = Intent(this@MainActivity, ProcessTextActivity::class.java)
                                         intent.putExtra("DRAFT_ID", draft.id)

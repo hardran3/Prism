@@ -91,10 +91,10 @@ object NotificationHelper {
                             val username = profile?.name ?: pk.take(8)
                             val noteText = if (group.count == 1) "1 note" else "${group.count} notes"
                             
-                            // Create Intent to open MainActivity with specific pubkey
                             val intent = android.content.Intent(context, com.ryans.nostrshare.MainActivity::class.java).apply {
                                 flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
                                 putExtra("SELECT_PUBKEY", pk)
+                                putExtra("OPEN_TAB", 1) // 1 = Scheduled Tab
                             }
                             val pendingIntent = android.app.PendingIntent.getActivity(
                                 context,
