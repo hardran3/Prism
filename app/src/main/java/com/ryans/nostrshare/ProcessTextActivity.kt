@@ -123,7 +123,7 @@ class ProcessTextActivity : ComponentActivity() {
              if (viewModel.postKind == ProcessTextViewModel.PostKind.MEDIA) {
                  val failingItem = viewModel.mediaItems.find { it.uploadedUrl == null && !it.isUploading && !it.isProcessing }
                  if (failingItem != null) {
-                      viewModel.initiateUploadAuth(this, failingItem)
+                      viewModel.initiateUploadAuth(failingItem)
                  }
              }
         }.onError { error ->
@@ -308,10 +308,24 @@ class ProcessTextActivity : ComponentActivity() {
         var showActionOptions by remember { mutableStateOf(false) }
         
         // Auto-save Draft
-        LaunchedEffect(vm.quoteContent, vm.sourceUrl, vm.postKind, vm.mediaUri, vm.uploadedMediaUrl) {
-            if (vm.isDraftMonitoringActive) {
-                kotlinx.coroutines.delay(1000) // Debounce 1s
-                vm.saveDraft()
+        LaunchedEffect(
+            vm.quoteContent, 
+            vm.sourceUrl, 
+            vm.postKind, 
+            vm.mediaItems.size, 
+            vm.previewTitle, 
+            vm.previewImageUrl, 
+            vm.highlightAuthorName,
+            vm.originalEventJson
+        ) {
+            vm.saveDraft()
+        }
+
+        // Link Preview Fetching
+        LaunchedEffect(vm.sourceUrl) {
+            val entity = NostrUtils.findNostrEntity(vm.sourceUrl)
+            if (entity == null && vm.sourceUrl.isNotBlank()) {
+                vm.fetchLinkPreview(vm.sourceUrl)
             }
         }
 
@@ -774,7 +788,7 @@ class ProcessTextActivity : ComponentActivity() {
                                                             if (pendingItems.isNotEmpty()) {
                                                                 val readyToUpload = pendingItems.find { !it.isUploading && !it.isProcessing }
                                                                 if (readyToUpload != null) {
-                                                                    vm.initiateUploadAuth(this@ProcessTextActivity, readyToUpload)
+                                                                    vm.initiateUploadAuth(readyToUpload)
                                                                 } else {
                                                                     Toast.makeText(this@ProcessTextActivity, "Please wait for uploads to complete.", Toast.LENGTH_SHORT).show()
                                                                 }
@@ -1295,7 +1309,7 @@ fun MediaDetailDialog(
                                     if (vm.isHapticEnabled()) {
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                     }
-                                    vm.initiateUploadAuth(context, item) 
+                                    vm.initiateUploadAuth(item) 
                                 },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
@@ -1385,7 +1399,7 @@ fun MediaDetailDialog(
                         // Not uploaded yet
                         TextButton(onClick = onDismiss) { Text("Cancel") }
                         Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = { vm.initiateUploadAuth(context, item) }) { Text("Upload") }
+                        Button(onClick = { vm.initiateUploadAuth(item) }) { Text("Upload") }
                     } else {
                         // Uploaded
                         TextButton(

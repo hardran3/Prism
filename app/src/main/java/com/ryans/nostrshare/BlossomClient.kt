@@ -6,7 +6,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
-import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -80,11 +79,6 @@ class BlossomClient(private val client: OkHttpClient) {
 
     data class UploadResult(val url: String, val serverHash: String?)
 
-    private fun sha256(data: ByteArray): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        return digest.digest(data).joinToString("") { "%02x".format(it) }
-    }
-
     suspend fun upload(
         context: Context, 
         data: ByteArray?, 
@@ -108,7 +102,7 @@ class BlossomClient(private val client: OkHttpClient) {
                 return if (uri != null) {
                     val contentResolver = context.contentResolver
                     val length = try {
-                        contentResolver.openFileDescriptor(uri, "r")?.statSize ?: -1L
+                        contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
                     } catch (e: Exception) { -1L }
                     
                     object : RequestBody() {
@@ -128,7 +122,7 @@ class BlossomClient(private val client: OkHttpClient) {
             fun getLength(): Long {
                  if (uri != null) {
                     return try {
-                        context.contentResolver.openFileDescriptor(uri, "r")?.statSize ?: -1L
+                        context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
                     } catch (e: Exception) { -1L }
                  }
                  return data?.size?.toLong() ?: 0L

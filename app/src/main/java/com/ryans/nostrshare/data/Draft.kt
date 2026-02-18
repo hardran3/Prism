@@ -26,5 +26,12 @@ data class Draft(
     val publishError: String? = null,
     val publishedEventId: String? = null,
     val actualPublishedAt: Long? = null,
-    val isOfflineRetry: Boolean = false
+    val isOfflineRetry: Boolean = false,
+    val savedContentBuffer: String? = null,
+    val previewTitle: String? = null,
+    val previewDescription: String? = null,
+    val previewImageUrl: String? = null,
+    val previewSiteName: String? = null,
+    val highlightAuthorName: String? = null,
+    val highlightAuthorAvatarUrl: String? = null
 )

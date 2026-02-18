@@ -5,7 +5,7 @@ import android.content.SharedPreferences
 
 data class BlossomServer(val url: String, val enabled: Boolean)
 
-class SettingsRepository(private val appContext: Context) {
+class SettingsRepository(appContext: Context) {
     private val prefs: SharedPreferences = appContext.getSharedPreferences("nostr_share_settings", Context.MODE_PRIVATE)
     
     private val onboardDefaults = listOf(
@@ -55,7 +55,9 @@ class SettingsRepository(private val appContext: Context) {
         prefs.edit().putBoolean(key, enabled).apply()
     }
 
+    @Suppress("unused")
     fun isOptimizeMediaEnabled(): Boolean = getCompressionLevel() != COMPRESSION_NONE
+    @Suppress("unused")
     fun setOptimizeMediaEnabled(enabled: Boolean) = setCompressionLevel(if (enabled) COMPRESSION_MEDIUM else COMPRESSION_NONE)
 
     fun getCompressionLevel(): Int = prefs.getInt("compression_level", COMPRESSION_MEDIUM)
@@ -134,6 +136,7 @@ class SettingsRepository(private val appContext: Context) {
     }
     
     // Helper for VM
+    @Suppress("unused")
     fun getEnabledBlossomServers(pubkey: String? = null): List<String> {
         return getBlossomServers(pubkey).filter { it.enabled }.map { it.url }
     }

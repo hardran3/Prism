@@ -58,6 +58,12 @@ class ProcessTextViewModel : ViewModel() {
     var currentOnboardingStep by mutableStateOf(OnboardingStep.WELCOME)
     var isSyncingServers by mutableStateOf(false)
 
+    // Cached GUI data (Web Preview)
+    var previewTitle by mutableStateOf<String?>(null)
+    var previewDescription by mutableStateOf<String?>(null)
+    var previewImageUrl by mutableStateOf<String?>(null)
+    var previewSiteName by mutableStateOf<String?>(null)
+
     // Configured Blossom servers for the current session
     var blossomServers by mutableStateOf<List<BlossomServer>>(emptyList())
     
@@ -390,7 +396,7 @@ class ProcessTextViewModel : ViewModel() {
                                 highlightEventId = event.optString("id")
                                 highlightAuthor = authorPubkey
                                 highlightKind = event.optInt("kind", 1)
-    var highlightIdentifier = if (entity.type == "naddr") entity.id else null
+                                highlightIdentifier = if (entity.type == "naddr") entity.id else null
                                 highlightRelays.clear()
                                 highlightRelays.addAll(entity.relays)
                                 
@@ -407,6 +413,30 @@ class ProcessTextViewModel : ViewModel() {
                         e.printStackTrace()
                     }
                 }
+            }
+        }
+    }
+
+    fun fetchLinkPreview(url: String) {
+        if (url == previewImageUrl || url == sourceUrl && previewTitle != null) return
+        
+        // Reset old preview
+        previewTitle = null
+        previewDescription = null
+        previewImageUrl = null
+        previewSiteName = null
+
+        viewModelScope.launch {
+            try {
+                val meta = com.ryans.nostrshare.utils.LinkPreviewManager.fetchMetadata(url)
+                if (meta != null) {
+                    previewTitle = meta.title
+                    previewDescription = meta.description
+                    previewImageUrl = meta.imageUrl
+                    previewSiteName = meta.siteName
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ProcessTextViewModel", "Error fetching preview: ${e.message}")
             }
         }
     }
@@ -477,17 +507,35 @@ class ProcessTextViewModel : ViewModel() {
         
         viewModelScope.launch {
             val mediaJson = serializeMediaItems(mediaItems)
+            val highlightRelaysJson = if (highlightRelays.isNotEmpty()) {
+                org.json.JSONArray(highlightRelays).toString()
+            } else {
+                null
+            }
             val draft = Draft(
                 content = quoteContent,
                 sourceUrl = sourceUrl,
                 kind = postKind.kind,
                 mediaJson = mediaJson,
                 mediaTitle = mediaTitle,
+                highlightEventId = highlightEventId,
+                highlightAuthor = highlightAuthor,
+                highlightKind = highlightKind,
+                highlightIdentifier = highlightIdentifier,
+                highlightRelaysJson = highlightRelaysJson,
+                originalEventJson = originalEventJson,
                 pubkey = pubkey, // Save pubkey for scheduling
                 isScheduled = true,
                 scheduledAt = timestamp,
                 signedJson = signedJson,
-                isAutoSave = false
+                isAutoSave = false,
+                savedContentBuffer = savedContentBuffer,
+                previewTitle = previewTitle,
+                previewDescription = previewDescription,
+                previewImageUrl = previewImageUrl,
+                previewSiteName = previewSiteName,
+                highlightAuthorName = highlightAuthorName,
+                highlightAuthorAvatarUrl = highlightAuthorUrl
             )
             val id = draftDao.insertDraft(draft)
             com.ryans.nostrshare.utils.SchedulerUtils.enqueueScheduledWork(
@@ -633,7 +681,7 @@ class ProcessTextViewModel : ViewModel() {
     
     private var lastProcessedWithOptimize: Boolean? = null
 
-    fun initiateUploadAuth(context: Context? = null, item: MediaUploadState) {
+    fun initiateUploadAuth(item: MediaUploadState) {
         val pk = pubkey ?: return
         
         val stableUri = processedMediaUris[item.id]
@@ -731,7 +779,7 @@ class ProcessTextViewModel : ViewModel() {
 
         // Start the first one - it will trigger subsequent ones in finalizeUpload
         val first = itemsToUpload.first()
-        initiateUploadAuth(context, first)
+        initiateUploadAuth(first)
     }
 
     fun resetBatchState() {
@@ -1025,7 +1073,7 @@ class ProcessTextViewModel : ViewModel() {
                     val nextItem = mediaItems.find { it.uploadedUrl == null && !it.isUploading && !it.isProcessing }
                     if (nextItem != null) {
                          batchUploadStatus = "Uploading next item..."
-                         initiateUploadAuth(null, nextItem)
+                         initiateUploadAuth(nextItem)
                     } else {
                         isBatchUploading = false
                         batchUploadStatus = "Batch Complete"
@@ -1102,7 +1150,14 @@ class ProcessTextViewModel : ViewModel() {
                 highlightRelaysJson = highlightRelaysJson,
                 originalEventJson = originalEventJson,
                 pubkey = pubkey,
-                isAutoSave = true
+                isAutoSave = true,
+                savedContentBuffer = savedContentBuffer,
+                previewTitle = previewTitle,
+                previewDescription = previewDescription,
+                previewImageUrl = previewImageUrl,
+                previewSiteName = previewSiteName,
+                highlightAuthorName = highlightAuthorName,
+                highlightAuthorAvatarUrl = highlightAuthorUrl
             )
             // Use a specific ID if we want to update the SAME auto-save slot
             // Actually insertDraft with REPLACE is fine if we manage the ID or just delete old one
@@ -1133,7 +1188,14 @@ class ProcessTextViewModel : ViewModel() {
                 highlightRelaysJson = highlightRelaysJson,
                 originalEventJson = originalEventJson,
                 pubkey = pubkey,
-                isAutoSave = false
+                isAutoSave = false,
+                savedContentBuffer = savedContentBuffer,
+                previewTitle = previewTitle,
+                previewDescription = previewDescription,
+                previewImageUrl = previewImageUrl,
+                previewSiteName = previewSiteName,
+                highlightAuthorName = highlightAuthorName,
+                highlightAuthorAvatarUrl = highlightAuthorUrl
             )
             val newId = draftDao.insertDraft(draft)
             if (currentDraftId == null) {
@@ -1201,6 +1263,15 @@ class ProcessTextViewModel : ViewModel() {
         highlightKind = draft.highlightKind
         highlightIdentifier = draft.highlightIdentifier
         originalEventJson = draft.originalEventJson
+        
+        // Restore cached GUI info
+        savedContentBuffer = draft.savedContentBuffer ?: ""
+        previewTitle = draft.previewTitle
+        previewDescription = draft.previewDescription
+        previewImageUrl = draft.previewImageUrl
+        previewSiteName = draft.previewSiteName
+        highlightAuthorName = draft.highlightAuthorName
+        highlightAuthorUrl = draft.highlightAuthorAvatarUrl
         try {
             draft.highlightRelaysJson?.let { jsonString ->
                 if (jsonString.isNotEmpty()) {
@@ -1220,10 +1291,13 @@ class ProcessTextViewModel : ViewModel() {
         }
         
         // Use PostKind values for restoration to avoid being limited by current session's availableKinds
-        val loadedKind = PostKind.values().find { it.kind == draft.kind } ?: PostKind.NOTE
+        val loadedKind = PostKind.entries.find { it.kind == draft.kind } ?: PostKind.NOTE
         postKind = loadedKind
         
         if (loadedKind == PostKind.REPOST && !availableKinds.contains(PostKind.REPOST)) {
+            availableKinds = availableKinds + PostKind.REPOST
+        } else if (highlightEventId != null && !availableKinds.contains(PostKind.REPOST)) {
+            // Also enable Repost option if we have highlight metadata, even if current mode is HIGHLIGHT
             availableKinds = availableKinds + PostKind.REPOST
         }
         
@@ -1586,12 +1660,23 @@ class ProcessTextViewModel : ViewModel() {
                     if (!isNetworkAvailable()) {
                         // Offline retry logic
                         val mediaJson = serializeMediaItems(mediaItems)
+                        val highlightRelaysJson = if (highlightRelays.isNotEmpty()) {
+                            org.json.JSONArray(highlightRelays).toString()
+                        } else {
+                            null
+                        }
                         val draft = Draft(
                             content = quoteContent,
                             sourceUrl = sourceUrl,
                             kind = postKind.kind,
                             mediaJson = mediaJson,
                             mediaTitle = mediaTitle,
+                            highlightEventId = highlightEventId,
+                            highlightAuthor = highlightAuthor,
+                            highlightKind = highlightKind,
+                            highlightIdentifier = highlightIdentifier,
+                            highlightRelaysJson = highlightRelaysJson,
+                            originalEventJson = originalEventJson,
                             pubkey = pubkey,
                             isScheduled = true,
                             isOfflineRetry = true,
@@ -1618,12 +1703,23 @@ class ProcessTextViewModel : ViewModel() {
                     // Offline retry logic in case of exception
                     viewModelScope.launch {
                         val mediaJson = serializeMediaItems(mediaItems)
+                        val highlightRelaysJson = if (highlightRelays.isNotEmpty()) {
+                            org.json.JSONArray(highlightRelays).toString()
+                        } else {
+                            null
+                        }
                         val draft = Draft(
                             content = quoteContent,
                             sourceUrl = sourceUrl,
                             kind = postKind.kind,
                             mediaJson = mediaJson,
                             mediaTitle = mediaTitle,
+                            highlightEventId = highlightEventId,
+                            highlightAuthor = highlightAuthor,
+                            highlightKind = highlightKind,
+                            highlightIdentifier = highlightIdentifier,
+                            highlightRelaysJson = highlightRelaysJson,
+                            originalEventJson = originalEventJson,
                             pubkey = pubkey,
                             isScheduled = true,
                             isOfflineRetry = true,

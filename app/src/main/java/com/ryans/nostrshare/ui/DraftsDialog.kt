@@ -181,8 +181,26 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
             val filteredContent = remember(draft.content) { filterImageUrls(draft.content) }
             
             // Rich Previews for Draft
-            var linkMetadata by remember(draft.id) { mutableStateOf<com.ryans.nostrshare.utils.LinkMetadata?>(null) }
-            var nostrEvent by remember(draft.id) { mutableStateOf<org.json.JSONObject?>(null) }
+            var linkMetadata by remember(draft.id, draft.previewTitle, draft.previewImageUrl) { 
+                mutableStateOf<com.ryans.nostrshare.utils.LinkMetadata?>(
+                    if (!draft.previewTitle.isNullOrBlank() || !draft.previewImageUrl.isNullOrBlank()) {
+                        com.ryans.nostrshare.utils.LinkMetadata(
+                            url = draft.sourceUrl,
+                            title = draft.previewTitle,
+                            description = draft.previewDescription,
+                            imageUrl = draft.previewImageUrl,
+                            siteName = draft.previewSiteName
+                        )
+                    } else null
+                )
+            }
+            var nostrEvent by remember(draft.id, draft.originalEventJson) { 
+                mutableStateOf<org.json.JSONObject?>(
+                    draft.originalEventJson?.let { 
+                        try { org.json.JSONObject(it) } catch (e: Exception) { null } 
+                    }
+                )
+            }
             
             val firstUrl = remember(draft.content, draft.sourceUrl) {
                 val urlRegex = "https?://[^\\s]+".toRegex()
@@ -195,12 +213,19 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
             }
 
             LaunchedEffect(firstUrl) {
+                if (linkMetadata != null) return@LaunchedEffect // Use cache if available
+                
                 firstUrl?.let { url ->
-                    linkMetadata = com.ryans.nostrshare.utils.LinkPreviewManager.fetchMetadata(url)
+                    val mediaPattern = ".*\\.(jpg|jpeg|png|gif|webp|bmp|svg|mp4|mov|webm|zip|pdf|exe|dmg|iso|apk)$".toRegex(RegexOption.IGNORE_CASE)
+                    if (!mediaPattern.matches(url.substringBefore("?"))) {
+                        linkMetadata = com.ryans.nostrshare.utils.LinkPreviewManager.fetchMetadata(url)
+                    }
                 }
             }
 
             LaunchedEffect(nostrEntity) {
+                if (nostrEvent != null) return@LaunchedEffect // Use cache if available
+                
                 nostrEntity?.let { entity ->
                     if (entity.type == "note" || entity.type == "nevent") {
                         nostrEvent = vm.relayManager.fetchEvent(entity.id, entity.relays)
@@ -269,24 +294,29 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
                     }
                     Text(
                         text = finalContent,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f)
                     )
                 }
             }
             
-            // Show Link Preview
-            linkMetadata?.let { meta ->
+            // Mutually Exclusive Previews: Link -> Nostr -> Fallback
+            if (linkMetadata != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) {
                 Spacer(Modifier.height(8.dp))
-                LinkPreviewCard(meta)
-            }
-
-            // Show Nostr Preview
-            nostrEvent?.let { event ->
+                LinkPreviewCard(linkMetadata!!)
+            } else if (nostrEvent != null) {
                 Spacer(Modifier.height(8.dp))
-                NostrEventPreview(event, vm)
+                NostrEventPreview(nostrEvent!!, vm)
+            } else if (!draft.sourceUrl.isNullOrBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Source: ${draft.sourceUrl}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
             
             // Media Thumbnails for Draft
@@ -506,8 +536,26 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                     val filteredContent = remember(note.content) { filterImageUrls(note.content) }
                     
                     // Rich Previews
-                    var linkMetadata by remember(note.id) { mutableStateOf<com.ryans.nostrshare.utils.LinkMetadata?>(null) }
-                    var nostrEvent by remember(note.id) { mutableStateOf<org.json.JSONObject?>(null) }
+                    var linkMetadata by remember(note.id, note.previewTitle, note.previewImageUrl) { 
+                        mutableStateOf<com.ryans.nostrshare.utils.LinkMetadata?>(
+                            if (!note.previewTitle.isNullOrBlank() || !note.previewImageUrl.isNullOrBlank()) {
+                                com.ryans.nostrshare.utils.LinkMetadata(
+                                    url = note.sourceUrl,
+                                    title = note.previewTitle,
+                                    description = note.previewDescription,
+                                    imageUrl = note.previewImageUrl,
+                                    siteName = note.previewSiteName
+                                )
+                            } else null
+                        )
+                    }
+                    var nostrEvent by remember(note.id, note.originalEventJson) { 
+                        mutableStateOf<org.json.JSONObject?>(
+                            note.originalEventJson?.let { 
+                                try { org.json.JSONObject(it) } catch (e: Exception) { null } 
+                            }
+                        )
+                    }
                     
                     val firstUrl = remember(note.content, note.sourceUrl) {
                         val urlRegex = "https?://[^\\s]+".toRegex()
@@ -521,18 +569,26 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                     }
 
                     LaunchedEffect(firstUrl) {
+                        if (linkMetadata != null) return@LaunchedEffect // Use cache
+                        
                         firstUrl?.let { url ->
-                            linkMetadata = com.ryans.nostrshare.utils.LinkPreviewManager.fetchMetadata(url)
+                            val mediaPattern = ".*\\.(jpg|jpeg|png|gif|webp|bmp|svg|mp4|mov|webm|zip|pdf|exe|dmg|iso|apk)$".toRegex(RegexOption.IGNORE_CASE)
+                            if (!mediaPattern.matches(url.substringBefore("?"))) {
+                                linkMetadata = com.ryans.nostrshare.utils.LinkPreviewManager.fetchMetadata(url)
+                            }
                         }
                     }
 
                     LaunchedEffect(nostrEntity) {
+                        if (nostrEvent != null) return@LaunchedEffect // Use cache
+                        
                         nostrEntity?.let { entity ->
                             if (entity.type == "note" || entity.type == "nevent") {
                                 nostrEvent = vm.relayManager.fetchEvent(entity.id, entity.relays)
                             }
                         }
                     }
+
 
                     // Combined Media Logic (Attachments + Embedded Links)
                     val combinedMediaItems = remember(note.mediaJson, note.content) {
@@ -597,25 +653,29 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                             }
                             Text(
                                 text = finalContent,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f)
                             )
                         }
                     }
-                    
-                    // Show Link Preview
-                    linkMetadata?.let { meta ->
-                        Spacer(Modifier.height(8.dp))
-                        LinkPreviewCard(meta)
-                    }
-
-                    // Show Nostr Preview
-                    nostrEvent?.let { event ->
-                        Spacer(Modifier.height(8.dp))
-                        NostrEventPreview(event, vm)
-                    }
+                            // Mutually Exclusive Previews: Link -> Nostr -> Fallback
+                            if (linkMetadata != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) {
+                                Spacer(Modifier.height(8.dp))
+                                LinkPreviewCard(linkMetadata!!)
+                            } else if (nostrEvent != null) {
+                                Spacer(Modifier.height(8.dp))
+                                NostrEventPreview(nostrEvent!!, vm)
+                            } else if (!note.sourceUrl.isNullOrBlank()) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "Source: ${note.sourceUrl}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                            }
                     
                     // Media Thumbnails for UnifiedPostItem
                     if (combinedMediaItems.isNotEmpty()) {
