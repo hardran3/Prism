@@ -29,7 +29,8 @@ object LinkPreviewManager {
             // Single GET request: More robust than HEAD + multiple GETs
             val request = Request.Builder()
                 .url(url)
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+                // Use a Social Media Bot User-Agent to trigger metadata-rich, lighter HTML from YouTube/video platforms
+                .header("User-Agent", "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)")
                 .build()
 
             client.newCall(request).execute().use { response ->
@@ -48,7 +49,7 @@ object LinkPreviewManager {
                 // 2. Read Body: Request up to 512KB to ensure we find metadata tags
                 val body = response.body ?: return@use null
                 val source = body.source()
-                source.request(512 * 1024) 
+                source.request(1024 * 1024) // Request up to 1MB to ensures we find metadata tags on heavy pages
                 
                 val doc = Jsoup.parse(source.buffer.clone().inputStream(), null, url)
                 

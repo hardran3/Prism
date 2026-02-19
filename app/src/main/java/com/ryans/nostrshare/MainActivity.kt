@@ -25,7 +25,9 @@ import coil.compose.AsyncImage
 import com.ryans.nostrshare.nip55.*
 import com.ryans.nostrshare.ui.DraftsHistoryContent
 import com.ryans.nostrshare.ui.OnboardingScreen
+import com.ryans.nostrshare.ui.AccountSelectorMenu
 import com.ryans.nostrshare.ui.theme.NostrShareTheme
+import androidx.compose.material.icons.filled.PersonAdd
 
 class MainActivity : ComponentActivity() {
     private val viewModel: ProcessTextViewModel by viewModels()
@@ -88,39 +90,57 @@ class MainActivity : ComponentActivity() {
                         Scaffold(
                             topBar = {
                                 val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                                var showAccountMenu by remember { mutableStateOf(false) }
+
                                 CenterAlignedTopAppBar(
                                     navigationIcon = {
-                                        IconButton(
-                                            modifier = Modifier.padding(start = 8.dp).size(40.dp),
-                                            onClick = {
-                                                if (viewModel.isHapticEnabled()) {
-                                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        Box {
+                                            IconButton(
+                                                modifier = Modifier.padding(start = 8.dp).size(40.dp),
+                                                onClick = {
+                                                    if (viewModel.isHapticEnabled()) {
+                                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                    }
+                                                    showAccountMenu = !showAccountMenu
                                                 }
-                                                if (Nip55.isSignerAvailable(this@MainActivity)) {
-                                                    getPublicKeyLauncher.launch(
-                                                        GetPublicKeyContract.Input(
-                                                            permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(24242), Permission.signEvent(20), Permission.signEvent(22)) 
-                                                        )
+                                            ) {
+                                                if (viewModel.userProfile?.pictureUrl != null) {
+                                                    AsyncImage(
+                                                        model = viewModel.userProfile!!.pictureUrl,
+                                                        contentDescription = "User Avatar",
+                                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                                        contentScale = ContentScale.Crop
                                                     )
                                                 } else {
-                                                     Toast.makeText(this@MainActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
+                                                    Icon(
+                                                        imageVector = Icons.Default.Person,
+                                                        contentDescription = "Login",
+                                                        modifier = Modifier.fillMaxSize().padding(8.dp)
+                                                    )
                                                 }
                                             }
-                                        ) {
-                                            if (viewModel.userProfile?.pictureUrl != null) {
-                                                AsyncImage(
-                                                    model = viewModel.userProfile!!.pictureUrl,
-                                                    contentDescription = "User Avatar",
-                                                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                                    contentScale = ContentScale.Crop
-                                                )
-                                            } else {
-                                                Icon(
-                                                    imageVector = Icons.Default.Person,
-                                                    contentDescription = "Login",
-                                                    modifier = Modifier.fillMaxSize().padding(8.dp)
-                                                )
-                                            }
+
+                                            AccountSelectorMenu(
+                                                expanded = showAccountMenu,
+                                                onDismiss = { showAccountMenu = false },
+                                                vm = viewModel,
+                                                onAddAccount = {
+                                                    showAccountMenu = false
+                                                    if (Nip55.isSignerAvailable(this@MainActivity)) {
+                                                        getPublicKeyLauncher.launch(
+                                                            GetPublicKeyContract.Input(
+                                                                permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(24242), Permission.signEvent(20), Permission.signEvent(22)) 
+                                                            )
+                                                        )
+                                                    } else {
+                                                         Toast.makeText(this@MainActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
+                                                    }
+                                                },
+                                                onSwitchAccount = { pubkey ->
+                                                    showAccountMenu = false
+                                                    viewModel.switchUser(pubkey)
+                                                }
+                                            )
                                         }
                                     },
                                     title = {
@@ -177,9 +197,7 @@ class MainActivity : ComponentActivity() {
                                         startActivity(intent)
                                     },
                                     onSaveToDrafts = { draft ->
-                                        viewModel.cancelScheduledNote(draft)
-                                        // No need to navigate if we just want to move it to drafts
-                                        // But DraftsHistoryContent handles it via vm calls.
+                                        viewModel.unscheduleAndSaveToDrafts(draft)
                                     },
                                     onOpenInClient = { eventId ->
                                         val noteId = NostrUtils.eventIdToNote(eventId)

@@ -179,4 +179,37 @@ class SettingsRepository(appContext: Context) {
         }
         prefs.edit().putString("username_cache_json_v2", obj.toString()).apply()
     }
+
+    fun getKnownAccounts(): List<Account> {
+        val jsonString = prefs.getString("known_accounts_json", null) ?: return emptyList()
+        val list = mutableListOf<Account>()
+        try {
+            val array = org.json.JSONArray(jsonString)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(Account(
+                    pubkey = obj.getString("pubkey"),
+                    npub = obj.optString("npub").takeIf { it.isNotEmpty() },
+                    signerPackage = obj.optString("signerPackage").takeIf { it.isNotEmpty() },
+                    name = obj.optString("name").takeIf { it.isNotEmpty() },
+                    pictureUrl = obj.optString("pictureUrl").takeIf { it.isNotEmpty() }
+                ))
+            }
+        } catch (_: Exception) {}
+        return list
+    }
+
+    fun setKnownAccounts(accounts: List<Account>) {
+        val array = org.json.JSONArray()
+        accounts.forEach { account ->
+            val obj = org.json.JSONObject()
+            obj.put("pubkey", account.pubkey)
+            obj.put("npub", account.npub)
+            obj.put("signerPackage", account.signerPackage)
+            obj.put("name", account.name)
+            obj.put("pictureUrl", account.pictureUrl)
+            array.put(obj)
+        }
+        prefs.edit().putString("known_accounts_json", array.toString()).apply()
+    }
 }

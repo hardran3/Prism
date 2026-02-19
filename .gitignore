@@ -2,3 +2,12 @@
 /.gradle/
 /app/build/
 /build/
+/app/release/app-release.apk
+/app/release/baselineProfiles/0/app-release.dm
+/app/release/baselineProfiles/1/app-release.dm
+/blossom.md
+/BLOSSOM-CONNECT.md
+/build_output.txt
+/NIP37.MD
+/NOSTR-BLOSSOM.md
+/app/release/output-metadata.json

@@ -73,6 +73,9 @@ class ProcessTextViewModel : ViewModel() {
         }
     }
 
+    // Active Accounts
+    var knownAccounts = mutableStateListOf<Account>()
+
     // User Profile Cache (pubkey -> profile)
     var usernameCache = mutableStateMapOf<String, UserProfile>()
     
@@ -140,6 +143,9 @@ class ProcessTextViewModel : ViewModel() {
                 refreshUserProfile()
             }
         }
+
+        // Initialize Known Accounts
+        knownAccounts.addAll(settingsRepository.getKnownAccounts())
         
         // Initialize Blossom servers
         blossomServers = settingsRepository.getBlossomServers(pubkey)
@@ -176,6 +182,16 @@ class ProcessTextViewModel : ViewModel() {
             .putString("npub", npubKey)
             .putString("signer_package", pkgName)
             .apply()
+
+        // Update Known Accounts
+        val existingIndex = knownAccounts.indexOfFirst { it.pubkey == hexKey }
+        val newAccount = Account(hexKey, npubKey, pkgName, userProfile?.name, userProfile?.pictureUrl)
+        if (existingIndex >= 0) {
+            knownAccounts[existingIndex] = newAccount
+        } else {
+            knownAccounts.add(newAccount)
+        }
+        settingsRepository.setKnownAccounts(knownAccounts.toList())
             
         refreshUserProfile()
     }
@@ -183,20 +199,22 @@ class ProcessTextViewModel : ViewModel() {
     fun switchUser(hexKey: String) {
         if (pubkey == hexKey) return
         
+        val account = knownAccounts.find { it.pubkey == hexKey }
+        
         pubkey = hexKey
-        // Note: npub and signerPackageName are harder to "recover" without a proper multi-user DB,
-        // but for now we just want the UI to show the right notes.
-        // We'll try to find the cached profile
-        val cachedProfile = usernameCache[hexKey]
-        if (cachedProfile != null) {
-            userProfile = cachedProfile
-        }
+        npub = account?.npub
+        signerPackageName = account?.signerPackage
+        userProfile = account?.let { UserProfile(it.name, it.pictureUrl) } ?: usernameCache[hexKey]
         
         // Reload scoped settings for this user
         blossomServers = settingsRepository.getBlossomServers(hexKey)
         
         // Persist as active user
-        prefs.edit().putString("pubkey", hexKey).apply()
+        prefs.edit()
+            .putString("pubkey", hexKey)
+            .putString("npub", npub)
+            .putString("signer_package", signerPackageName)
+            .apply()
         
         refreshUserProfile()
     }
@@ -213,6 +231,14 @@ class ProcessTextViewModel : ViewModel() {
                         .putString("user_name", profile.name)
                         .putString("user_pic", profile.pictureUrl)
                         .apply()
+                        
+                    // Update Known Accounts list
+                    val index = knownAccounts.indexOfFirst { it.pubkey == pk }
+                    if (index >= 0) {
+                        val updated = knownAccounts[index].copy(name = profile.name, pictureUrl = profile.pictureUrl)
+                        knownAccounts[index] = updated
+                        settingsRepository.setKnownAccounts(knownAccounts.toList())
+                    }
                 }
                 
                 // Also Sync Blossom Servers
@@ -563,6 +589,30 @@ class ProcessTextViewModel : ViewModel() {
             com.ryans.nostrshare.utils.SchedulerUtils.cancelScheduledWork(context, draft.id)
             
             // Update notification
+            com.ryans.nostrshare.utils.NotificationHelper.updateScheduledNotification(context)
+        }
+    }
+
+    fun unscheduleAndSaveToDrafts(draft: Draft) {
+        viewModelScope.launch {
+            // 1. Cancel the background worker
+            val context = NostrShareApp.getInstance()
+            com.ryans.nostrshare.utils.SchedulerUtils.cancelScheduledWork(context, draft.id)
+            
+            // 2. Update draft state to be a regular draft
+            val updatedDraft = draft.copy(
+                isScheduled = false,
+                scheduledAt = null,
+                signedJson = null, // Discard signature as it's for a specific future timestamp
+                publishError = null,
+                isCompleted = false,
+                lastEdited = System.currentTimeMillis()
+            )
+            
+            // 3. Save back to DB
+            draftDao.insertDraft(updatedDraft)
+            
+            // 4. Update notification
             com.ryans.nostrshare.utils.NotificationHelper.updateScheduledNotification(context)
         }
     }

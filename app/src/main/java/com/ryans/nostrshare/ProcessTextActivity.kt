@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import com.ryans.nostrshare.nip55.*
 import com.ryans.nostrshare.ui.theme.NostrShareTheme
 import com.ryans.nostrshare.ui.DraftsDialog
+import com.ryans.nostrshare.ui.AccountSelectorMenu
 import com.ryans.nostrshare.data.Draft
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Popup
@@ -38,6 +39,8 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.animation.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
@@ -370,40 +373,59 @@ class ProcessTextActivity : ComponentActivity() {
         Scaffold(
             modifier = Modifier.fillMaxSize().imePadding(), // Fix: Resize Scaffold for keyboard
             topBar = {
+                // Account Menu State
+                var showAccountMenu by remember { mutableStateOf(false) }
+
                 TopAppBar(
                     navigationIcon = {
                         // User Avatar / Login - Large
-                        IconButton(
-                            modifier = Modifier.padding(start = 8.dp).size(48.dp),
-                            onClick = {
-                                if (vm.isHapticEnabled()) {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        Box {
+                            IconButton(
+                                modifier = Modifier.padding(start = 8.dp).size(48.dp),
+                                onClick = {
+                                    if (vm.isHapticEnabled()) {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    }
+                                    showAccountMenu = !showAccountMenu
                                 }
-                                if (Nip55.isSignerAvailable(this@ProcessTextActivity)) {
-                                    getPublicKeyLauncher.launch(
-                                        GetPublicKeyContract.Input(
-                                            permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(24242), Permission.signEvent(20), Permission.signEvent(22)) 
-                                        )
+                            ) {
+                                if (vm.userProfile?.pictureUrl != null) {
+                                    coil.compose.AsyncImage(
+                                        model = vm.userProfile!!.pictureUrl,
+                                        contentDescription = "User Avatar",
+                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                     )
                                 } else {
-                                     Toast.makeText(this@ProcessTextActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = "Login",
+                                        modifier = Modifier.fillMaxSize().padding(8.dp)
+                                    )
                                 }
                             }
-                        ) {
-                            if (vm.userProfile?.pictureUrl != null) {
-                                coil.compose.AsyncImage(
-                                    model = vm.userProfile!!.pictureUrl,
-                                    contentDescription = "User Avatar",
-                                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Person,
-                                    contentDescription = "Login",
-                                    modifier = Modifier.fillMaxSize().padding(8.dp)
-                                )
-                            }
+
+                            AccountSelectorMenu(
+                                expanded = showAccountMenu,
+                                onDismiss = { showAccountMenu = false },
+                                vm = vm,
+                                onAddAccount = {
+                                    showAccountMenu = false
+                                    if (Nip55.isSignerAvailable(this@ProcessTextActivity)) {
+                                        getPublicKeyLauncher.launch(
+                                            GetPublicKeyContract.Input(
+                                                permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(24242), Permission.signEvent(20), Permission.signEvent(22)) 
+                                            )
+                                        )
+                                    } else {
+                                         Toast.makeText(this@ProcessTextActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
+                                    }
+                                },
+                                onSwitchAccount = { pubkey ->
+                                    showAccountMenu = false
+                                    vm.switchUser(pubkey)
+                                }
+                            )
                         }
                     },
                     title = { 
@@ -1402,16 +1424,6 @@ fun MediaDetailDialog(
                         Button(onClick = { vm.initiateUploadAuth(item) }) { Text("Upload") }
                     } else {
                         // Uploaded
-                        TextButton(
-                            onClick = { 
-                                vm.deleteMedia(item) 
-                                onDismiss()
-                            }, 
-                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                        ) { 
-                            Text("Delete") 
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
                         Button(onClick = onDismiss) { Text("Close") }
                     }
                 }

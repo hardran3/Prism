@@ -178,8 +178,6 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
                 Text(date, style = MaterialTheme.typography.labelSmall)
             }
             Spacer(Modifier.height(4.dp))
-            val filteredContent = remember(draft.content) { filterImageUrls(draft.content) }
-            
             // Rich Previews for Draft
             var linkMetadata by remember(draft.id, draft.previewTitle, draft.previewImageUrl) { 
                 mutableStateOf<com.ryans.nostrshare.utils.LinkMetadata?>(
@@ -257,8 +255,8 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
                 attached + embeddedUrls
             }
 
-            val finalContent = remember(draft.content, linkMetadata, nostrEvent, combinedMediaItems) {
-                var content = filteredContent
+            val baseContent = remember(draft.content, linkMetadata, nostrEvent, nostrEntity) {
+                var content = draft.content
                 
                 // Hide Link Preview URL only if it has a title or image
                 if (linkMetadata != null && firstUrl != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) {
@@ -268,66 +266,86 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
                 if (nostrEvent != null && nostrEntity != null) {
                     content = content.replace(nostrEntity.bech32, "").trim()
                 }
-                
-                val pattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
-                combinedMediaItems.forEach { item ->
-                    item.uploadedUrl?.let { url ->
-                        if (pattern.matches(url)) {
-                            content = content.replace(url, "").trim()
-                        }
-                    }
-                }
                 content
             }
 
-            if (finalContent.isNotBlank()) {
-                Row(modifier = Modifier.height(IntrinsicSize.Max), verticalAlignment = Alignment.CenterVertically) {
-                    if (draft.kind == 9802) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .width(4.dp)
-                                .padding(vertical = 2.dp)
-                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
-                        )
-                        Spacer(Modifier.width(12.dp))
+            val hasPreview = (linkMetadata != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) || 
+                             nostrEvent != null || 
+                             !draft.sourceUrl.isNullOrBlank()
+
+            if (baseContent.isNotBlank() || combinedMediaItems.isNotEmpty() || hasPreview) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.height(IntrinsicSize.Max), verticalAlignment = Alignment.CenterVertically) {
+                        if (draft.kind == 9802) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(4.dp)
+                                    .padding(vertical = 2.dp)
+                                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                            )
+                            Spacer(Modifier.width(12.dp))
+                        }
+                        
+                        Column(modifier = Modifier.weight(1f)) {
+                            IntegratedContent(
+                                content = draft.content,
+                                mediaItems = combinedMediaItems,
+                                linkMetadata = linkMetadata,
+                                onMediaClick = onMediaClick
+                            )
+                        }
                     }
-                    Text(
-                        text = finalContent,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f)
-                    )
+
+                    // Previews and Leftover Media (Outside the highlight bar)
+                    val meta = linkMetadata // Capture delegated property for smart casting
+                    val urlRegex = "https?://[^\\s]+".toRegex()
+                    val ogUrl = meta?.url?.takeIf { meta.title != null || meta.imageUrl != null }
+                    val ogShownInline = ogUrl != null && urlRegex.findAll(draft.content).any { it.value.equals(ogUrl, ignoreCase = true) }
+                    
+                    val showFallbackOG = !ogShownInline && meta != null && (meta.title != null || meta.imageUrl != null)
+                    val showNostrPreview = nostrEvent != null
+                    // Hide source link if any rich preview (OG card or Nostr event) is shown
+                    val hasRichPreview = (meta != null && (meta.title != null || meta.imageUrl != null)) || showNostrPreview
+                    val showFallbackSource = !hasRichPreview && !draft.sourceUrl.isNullOrBlank()
+
+                    if (showFallbackOG) {
+                        Spacer(Modifier.height(8.dp))
+                        LinkPreviewCard(meta!!)
+                    } else if (showNostrPreview) {
+                        Spacer(Modifier.height(8.dp))
+                        NostrEventPreview(nostrEvent!!, vm)
+                    } else if (showFallbackSource) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Source: ${draft.sourceUrl}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
+
+                    // Leftover Media
+                    val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
+                    val mediaUrlsInText = mediaUrlPattern.findAll(draft.content).map { it.value.lowercase() }.toSet()
+                    val leftoverMedia = combinedMediaItems.filter { item ->
+                        val url = item.uploadedUrl?.lowercase()
+                        url == null || url !in mediaUrlsInText
+                    }
+                    if (leftoverMedia.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        ResponsiveMediaGrid(leftoverMedia, onMediaClick)
+                    }
                 }
             }
-            
-            // Mutually Exclusive Previews: Link -> Nostr -> Fallback
-            if (linkMetadata != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) {
-                Spacer(Modifier.height(8.dp))
-                LinkPreviewCard(linkMetadata!!)
-            } else if (nostrEvent != null) {
-                Spacer(Modifier.height(8.dp))
-                NostrEventPreview(nostrEvent!!, vm)
-            } else if (!draft.sourceUrl.isNullOrBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "Source: ${draft.sourceUrl}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-            }
-            
-            // Media Thumbnails for Draft
-            if (combinedMediaItems.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                MediaThumbnailRow(combinedMediaItems, onMediaClick)
-            }
 
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                IconButton(onClick = { onDelete(draft) }) {
-                    Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+            Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.CenterEnd) {
+                TextButton(onClick = { onSelect(draft) }) {
+                    Icon(Icons.Default.Edit, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Edit")
                 }
             }
         }
@@ -365,9 +383,6 @@ fun ScheduledList(
                                 Icon(Icons.Default.Edit, null, Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text("Edit")
-                            }
-                            IconButton(onClick = { onCancel(note) }) {
-                                Icon(Icons.Default.Delete, "Cancel", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
                             }
                         }
                     }
@@ -533,7 +548,6 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                     }
 
                     Spacer(Modifier.height(4.dp))
-                    val filteredContent = remember(note.content) { filterImageUrls(note.content) }
                     
                     // Rich Previews
                     var linkMetadata by remember(note.id, note.previewTitle, note.previewImageUrl) { 
@@ -614,8 +628,8 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                         attached + embeddedUrls
                     }
 
-                    val finalContent = remember(filteredContent, linkMetadata, nostrEvent, combinedMediaItems) {
-                        var content = filteredContent
+                    val baseContent = remember(note.content, linkMetadata, nostrEvent, nostrEntity) {
+                        var content = note.content
                         
                         // Hide Link Preview URL only if it has a title or image
                         if (linkMetadata != null && firstUrl != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) {
@@ -625,47 +639,56 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                         if (nostrEvent != null && nostrEntity != null) {
                             content = content.replace(nostrEntity.bech32, "").trim()
                         }
-                        
-                        val pattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
-                        // Also hide URLs that are now in the thumbnail row
-                        combinedMediaItems.forEach { item ->
-                            item.uploadedUrl?.let { url ->
-                                // Only hide direct media links, not every link that might be in a preview card
-                                if (pattern.matches(url)) {
-                                    content = content.replace(url, "").trim()
-                                }
-                            }
-                        }
                         content
                     }
 
-                    if (finalContent.isNotBlank()) {
-                        Row(modifier = Modifier.height(IntrinsicSize.Max), verticalAlignment = Alignment.CenterVertically) {
-                            if (note.kind == 9802) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .width(4.dp)
-                                        .padding(vertical = 2.dp)
-                                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
-                                )
-                                Spacer(Modifier.width(12.dp))
+                    val hasPreview = (linkMetadata != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) || 
+                                     nostrEvent != null || 
+                                     !note.sourceUrl.isNullOrBlank()
+
+                    if (baseContent.isNotBlank() || combinedMediaItems.isNotEmpty() || hasPreview) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(modifier = Modifier.height(IntrinsicSize.Max), verticalAlignment = Alignment.CenterVertically) {
+                                if (note.kind == 9802) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .width(4.dp)
+                                            .padding(vertical = 2.dp)
+                                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                }
+                                
+                                Column(modifier = Modifier.weight(1f)) {
+                                    IntegratedContent(
+                                        content = note.content,
+                                        mediaItems = combinedMediaItems,
+                                        linkMetadata = linkMetadata,
+                                        onMediaClick = onMediaClick
+                                    )
+                                }
                             }
-                            Text(
-                                text = finalContent,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                            // Mutually Exclusive Previews: Link -> Nostr -> Fallback
-                            if (linkMetadata != null && (linkMetadata!!.title != null || linkMetadata!!.imageUrl != null)) {
+
+                            // Previews and Leftover Media (Outside the highlight bar)
+                            val meta = linkMetadata // Capture delegated property for smart casting
+                            val urlRegex = "https?://[^\\s]+".toRegex()
+                            val ogUrl = meta?.url?.takeIf { meta.title != null || meta.imageUrl != null }
+                            val ogShownInline = ogUrl != null && urlRegex.findAll(note.content).any { it.value.equals(ogUrl, ignoreCase = true) }
+                            
+                            val showFallbackOG = !ogShownInline && meta != null && (meta.title != null || meta.imageUrl != null)
+                            val showNostrPreview = nostrEvent != null
+                            // Hide source link if any rich preview (OG card or Nostr event) is shown
+                            val hasRichPreview = (meta != null && (meta.title != null || meta.imageUrl != null)) || showNostrPreview
+                            val showFallbackSource = !hasRichPreview && !note.sourceUrl.isNullOrBlank()
+
+                            if (showFallbackOG) {
                                 Spacer(Modifier.height(8.dp))
-                                LinkPreviewCard(linkMetadata!!)
-                            } else if (nostrEvent != null) {
+                                LinkPreviewCard(meta!!)
+                            } else if (showNostrPreview) {
                                 Spacer(Modifier.height(8.dp))
                                 NostrEventPreview(nostrEvent!!, vm)
-                            } else if (!note.sourceUrl.isNullOrBlank()) {
+                            } else if (showFallbackSource) {
                                 Spacer(Modifier.height(4.dp))
                                 Text(
                                     text = "Source: ${note.sourceUrl}",
@@ -676,11 +699,19 @@ fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaU
                                     modifier = Modifier.padding(horizontal = 4.dp)
                                 )
                             }
-                    
-                    // Media Thumbnails for UnifiedPostItem
-                    if (combinedMediaItems.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        MediaThumbnailRow(combinedMediaItems, onMediaClick)
+
+                            // Leftover Media
+                            val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
+                            val mediaUrlsInText = mediaUrlPattern.findAll(note.content).map { it.value.lowercase() }.toSet()
+                            val leftoverMedia = combinedMediaItems.filter { item ->
+                                val url = item.uploadedUrl?.lowercase()
+                                url == null || url !in mediaUrlsInText
+                            }
+                            if (leftoverMedia.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                ResponsiveMediaGrid(leftoverMedia, onMediaClick)
+                            }
+                        }
                     }
                     
                     if (isCompleted && note.publishError != null) {
@@ -845,6 +876,8 @@ fun parseMediaJson(json: String?): List<MediaUploadState> {
 
 @Composable
 fun MediaThumbnailRow(mediaItems: List<MediaUploadState>, onMediaClick: (MediaUploadState) -> Unit) {
+    // Keeping this for now in case other parts of the app use it, but marking as deprecated or updating its style if needed.
+    // However, for Drafts we now use ResponsiveMediaGrid.
     Row(
         modifier = Modifier.fillMaxWidth().height(60.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -858,7 +891,6 @@ fun MediaThumbnailRow(mediaItems: List<MediaUploadState>, onMediaClick: (MediaUp
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                     .clickable { onMediaClick(item) }
             ) {
-                // STATIC ICON FOR VIDEOS (No Coil/Download)
                 if (item.mimeType?.startsWith("video/") == true) {
                      Box(
                          modifier = Modifier.fillMaxSize(),
@@ -891,6 +923,227 @@ fun MediaThumbnailRow(mediaItems: List<MediaUploadState>, onMediaClick: (MediaUp
             ) {
                 Text("+${mediaItems.size - 5}", style = MaterialTheme.typography.labelSmall)
             }
+        }
+    }
+}
+
+@Composable
+fun IntegratedContent(
+    content: String,
+    mediaItems: List<MediaUploadState>,
+    linkMetadata: com.ryans.nostrshare.utils.LinkMetadata? = null,
+    onMediaClick: (MediaUploadState) -> Unit
+) {
+    val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
+    val urlRegex = "https?://[^\\s]+".toRegex()
+
+    // 1. Identify all media URLs and their positions
+    val mediaMatches = mediaUrlPattern.findAll(content).toList()
+    
+    // 2. Identify the OpenGraph URL if it qualifies for an inline card
+    val ogUrl = linkMetadata?.url?.takeIf { linkMetadata.title != null || linkMetadata.imageUrl != null }
+    val ogMatch = ogUrl?.let { url -> 
+        urlRegex.findAll(content).find { it.value.equals(url, ignoreCase = true) }
+    }
+
+    // 3. Split content into segments (Text, MediaGroup, or LinkPreview)
+    val segments = mutableListOf<ContentSegment>()
+    var lastIndex = 0
+    
+    val allMatches = (mediaMatches + listOfNotNull(ogMatch)).sortedBy { it.range.first }
+
+    var i = 0
+    while (i < allMatches.size) {
+        val match = allMatches[i]
+        
+        if (match.range.first > lastIndex) {
+            segments.add(ContentSegment.Text(content.substring(lastIndex, match.range.first)))
+        }
+        
+        if (match == ogMatch) {
+            segments.add(ContentSegment.LinkPreview(linkMetadata!!))
+            lastIndex = match.range.last + 1
+            i++
+        } else {
+            val group = mutableListOf<String>()
+            group.add(match.value)
+            
+            var nextI = i + 1
+            var currentEnd = match.range.last + 1
+            while (nextI < allMatches.size) {
+                val nextMatch = allMatches[nextI]
+                if (nextMatch == ogMatch) break 
+                
+                val gap = content.substring(currentEnd, nextMatch.range.first)
+                if (gap.isBlank()) {
+                    group.add(nextMatch.value)
+                    currentEnd = nextMatch.range.last + 1
+                    nextI++
+                } else {
+                    break
+                }
+            }
+            
+            val groupedItems = group.mapNotNull { url ->
+                mediaItems.find { it.uploadedUrl?.lowercase() == url.lowercase() }
+            }
+            
+            if (groupedItems.isNotEmpty()) {
+                segments.add(ContentSegment.MediaGroup(groupedItems))
+            } else {
+                segments.add(ContentSegment.Text(group.joinToString(" ")))
+            }
+            
+            i = nextI
+            lastIndex = currentEnd
+        }
+    }
+    
+    if (lastIndex < content.length) {
+        segments.add(ContentSegment.Text(content.substring(lastIndex)))
+    }
+    
+    // Render Segments
+    Column(modifier = Modifier.fillMaxWidth()) {
+        segments.forEach { segment ->
+            when (segment) {
+                is ContentSegment.Text -> {
+                    if (segment.text.trim().isNotBlank()) {
+                        Text(
+                            text = segment.text.trim(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                }
+                is ContentSegment.MediaGroup -> {
+                    ResponsiveMediaGrid(segment.items, onMediaClick)
+                    Spacer(Modifier.height(8.dp))
+                }
+                is ContentSegment.LinkPreview -> {
+                    LinkPreviewCard(segment.meta)
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+    }
+}
+
+sealed class ContentSegment {
+    data class Text(val text: String) : ContentSegment()
+    data class MediaGroup(val items: List<MediaUploadState>) : ContentSegment()
+    data class LinkPreview(val meta: com.ryans.nostrshare.utils.LinkMetadata) : ContentSegment()
+}
+
+@Composable
+fun ResponsiveMediaGrid(mediaItems: List<MediaUploadState>, onMediaClick: (MediaUploadState) -> Unit) {
+    val cornerSize = 12.dp
+    val spacing = 2.dp
+    
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(cornerSize))
+    ) {
+        when (mediaItems.size) {
+            1 -> {
+                MediaGridItem(mediaItems[0], Modifier.fillMaxWidth().aspectRatio(16f/9f), onMediaClick)
+            }
+            2 -> {
+                Row(Modifier.fillMaxWidth().aspectRatio(2f/1f)) {
+                    MediaGridItem(mediaItems[0], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                    Spacer(Modifier.width(spacing))
+                    MediaGridItem(mediaItems[1], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                }
+            }
+            3 -> {
+                Row(Modifier.fillMaxWidth().aspectRatio(2f/1f)) {
+                    MediaGridItem(mediaItems[0], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                    Spacer(Modifier.width(spacing))
+                    Column(Modifier.weight(0.5f).fillMaxHeight()) {
+                        MediaGridItem(mediaItems[1], Modifier.weight(1f).fillMaxWidth(), onMediaClick)
+                        Spacer(Modifier.height(spacing))
+                        MediaGridItem(mediaItems[2], Modifier.weight(1f).fillMaxWidth(), onMediaClick)
+                    }
+                }
+            }
+            4 -> {
+                Column(Modifier.fillMaxWidth().aspectRatio(1.5f/1f)) {
+                    Row(Modifier.weight(1f)) {
+                        MediaGridItem(mediaItems[0], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                        Spacer(Modifier.width(spacing))
+                        MediaGridItem(mediaItems[1], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                    }
+                    Spacer(Modifier.height(spacing))
+                    Row(Modifier.weight(1f)) {
+                        MediaGridItem(mediaItems[2], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                        Spacer(Modifier.width(spacing))
+                        MediaGridItem(mediaItems[3], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                    }
+                }
+            }
+            else -> {
+                // 5+ items: 2x2 grid with overlay on the last one
+                Column(Modifier.fillMaxWidth().aspectRatio(1.5f/1f)) {
+                    Row(Modifier.weight(1f)) {
+                        MediaGridItem(mediaItems[0], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                        Spacer(Modifier.width(spacing))
+                        MediaGridItem(mediaItems[1], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                    }
+                    Spacer(Modifier.height(spacing))
+                    Row(Modifier.weight(1f)) {
+                        MediaGridItem(mediaItems[2], Modifier.weight(1f).fillMaxHeight(), onMediaClick)
+                        Spacer(Modifier.width(spacing))
+                        Box(Modifier.weight(1f).fillMaxHeight()) {
+                            MediaGridItem(mediaItems[3], Modifier.fillMaxSize(), onMediaClick)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "+${mediaItems.size - 3}",
+                                    color = androidx.compose.ui.graphics.Color.White,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MediaGridItem(item: MediaUploadState, modifier: Modifier, onMediaClick: (MediaUploadState) -> Unit) {
+    val model = item.uploadedUrl ?: item.uri
+    Box(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable { onMediaClick(item) }
+    ) {
+        if (item.mimeType?.startsWith("video/") == true) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Video",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(48.dp)
+                )
+            }
+        } else {
+            AsyncImage(
+                model = model,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
         }
     }
 }

@@ -5,3 +5,11 @@ data class UserProfile(
     val pictureUrl: String?,
     val lud16: String? = null
 )
+
+data class Account(
+    val pubkey: String,
+    val npub: String?,
+    val signerPackage: String?,
+    val name: String?,
+    val pictureUrl: String?
+)
