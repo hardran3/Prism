@@ -22,52 +22,109 @@ fun AccountSelectorMenu(
     onDismiss: () -> Unit,
     vm: ProcessTextViewModel,
     onAddAccount: () -> Unit,
-    onSwitchAccount: (String) -> Unit
+    onSwitchAccount: (String) -> Unit,
+    addAccountAtTop: Boolean = false
 ) {
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        offset = androidx.compose.ui.unit.DpOffset(x = 8.dp, y = 0.dp),
-        properties = PopupProperties(focusable = false)
-    ) {
-        vm.knownAccounts.forEach { account ->
-            DropdownMenuItem(
-                text = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (account.pictureUrl != null) {
-                            AsyncImage(
-                                model = account.pictureUrl,
-                                contentDescription = null,
-                                modifier = Modifier.size(32.dp).clip(CircleShape),
-                                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+    if (addAccountAtTop) {
+        if (expanded) {
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.BottomEnd,
+                offset = androidx.compose.ui.unit.IntOffset(0, 0),
+                onDismissRequest = onDismiss,
+                properties = PopupProperties(focusable = true)
+            ) {
+                androidx.compose.material3.Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                    tonalElevation = 4.dp,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.width(IntrinsicSize.Max)
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                        AddAccountItem(onAddAccount)
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        
+                        vm.knownAccounts.forEach { account ->
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (account.pictureUrl != null) {
+                                            AsyncImage(
+                                                model = account.pictureUrl,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(32.dp).clip(CircleShape),
+                                                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                            )
+                                        } else {
+                                            Icon(Icons.Default.Person, null, modifier = Modifier.size(32.dp))
+                                        }
+                                        Spacer(Modifier.width(12.dp))
+                                        Text(
+                                            text = account.name ?: (account.npub?.take(12) ?: account.pubkey.take(8)),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = if (vm.pubkey == account.pubkey) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (vm.pubkey == account.pubkey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                },
+                                onClick = { onSwitchAccount(account.pubkey) }
                             )
-                        } else {
-                            Icon(Icons.Default.Person, null, modifier = Modifier.size(32.dp))
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = account.name ?: (account.npub?.take(12) ?: account.pubkey.take(8)),
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = if (vm.pubkey == account.pubkey) FontWeight.Bold else FontWeight.Normal,
-                            color = if (vm.pubkey == account.pubkey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                        )
                     }
-                },
-                onClick = { onSwitchAccount(account.pubkey) }
-            )
-        }
-        
-        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-        
-        DropdownMenuItem(
-            text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(32.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("Add Account", style = MaterialTheme.typography.bodyLarge)
                 }
-            },
-            onClick = onAddAccount
-        )
+            }
+        }
+    } else {
+        androidx.compose.material3.DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismiss,
+            offset = androidx.compose.ui.unit.DpOffset(x = 0.dp, y = (-8).dp),
+            properties = PopupProperties(focusable = false),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+            tonalElevation = 4.dp,
+            shadowElevation = 8.dp,
+        ) {
+            vm.knownAccounts.forEach { account ->
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (account.pictureUrl != null) {
+                                AsyncImage(
+                                    model = account.pictureUrl,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(32.dp).clip(CircleShape),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                )
+                            } else {
+                                Icon(Icons.Default.Person, null, modifier = Modifier.size(32.dp))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = account.name ?: (account.npub?.take(12) ?: account.pubkey.take(8)),
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (vm.pubkey == account.pubkey) FontWeight.Bold else FontWeight.Normal,
+                                color = if (vm.pubkey == account.pubkey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    },
+                    onClick = { onSwitchAccount(account.pubkey) }
+                )
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            AddAccountItem(onAddAccount)
+        }
     }
+}
+
+@Composable
+private fun AddAccountItem(onAddAccount: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(32.dp))
+                Spacer(Modifier.width(12.dp))
+                Text("Add Account", style = MaterialTheme.typography.bodyLarge)
+            }
+        },
+        onClick = onAddAccount
+    )
 }

@@ -658,7 +658,7 @@ class ProcessTextViewModel : ViewModel() {
             prepareMedia(context, item)
         }
         
-        blossomServers = settingsRepository.getBlossomServers()
+        blossomServers = settingsRepository.getBlossomServers(pubkey)
         showSharingDialog = true
     }
     

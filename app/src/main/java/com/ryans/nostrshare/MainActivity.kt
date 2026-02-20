@@ -7,14 +7,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -87,104 +92,182 @@ class MainActivity : ComponentActivity() {
                     if (!viewModel.isOnboarded) {
                         OnboardingScreen(viewModel, getPublicKeyLauncher)
                     } else {
+                        val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                        var showAccountMenu by remember { mutableStateOf(false) }
+
+                        val draftCount by viewModel.drafts.collectAsState(initial = emptyList())
+                        val scheduledCount by viewModel.allScheduled.collectAsState(initial = emptyList())
+
                         Scaffold(
-                            topBar = {
-                                val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-                                var showAccountMenu by remember { mutableStateOf(false) }
-
-                                CenterAlignedTopAppBar(
-                                    navigationIcon = {
-                                        Box {
+                            bottomBar = {
+                                    Surface(
+                                        tonalElevation = 3.dp,
+                                        modifier = Modifier.height(72.dp).fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxSize(),
+                                            horizontalArrangement = Arrangement.SpaceEvenly,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // 1. Add
+                                            val isAddSelected = false
                                             IconButton(
-                                                modifier = Modifier.padding(start = 8.dp).size(40.dp),
                                                 onClick = {
-                                                    if (viewModel.isHapticEnabled()) {
-                                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                                    }
-                                                    showAccountMenu = !showAccountMenu
-                                                }
+                                                    if (viewModel.isHapticEnabled()) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                    val intent = Intent(this@MainActivity, ProcessTextActivity::class.java)
+                                                    intent.putExtra("LAUNCH_MODE", "NOTE")
+                                                    startActivity(intent)
+                                                },
+                                                modifier = Modifier.weight(1f).padding(bottom = 6.dp)
                                             ) {
-                                                if (viewModel.userProfile?.pictureUrl != null) {
-                                                    AsyncImage(
-                                                        model = viewModel.userProfile!!.pictureUrl,
-                                                        contentDescription = "User Avatar",
-                                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                                        contentScale = ContentScale.Crop
-                                                    )
-                                                } else {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Person,
-                                                        contentDescription = "Login",
-                                                        modifier = Modifier.fillMaxSize().padding(8.dp)
-                                                    )
+                                                Icon(Icons.Default.Add, "Add Note", Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+
+                                            // 2. Drafts
+                                            val isDraftsSelected = initialTab == 0
+                                            IconButton(
+                                                onClick = {
+                                                    initialTab = 0
+                                                },
+                                                modifier = Modifier.weight(1f).padding(bottom = 6.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(CircleShape)
+                                                        .background(if (isDraftsSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    BadgedBox(
+                                                        badge = {
+                                                            if (draftCount.isNotEmpty()) {
+                                                                Badge { Text(draftCount.size.toString()) }
+                                                            }
+                                                        }
+                                                    ) {
+                                                        Icon(Icons.Default.Edit, "Drafts", Modifier.size(32.dp), tint = if (isDraftsSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    }
                                                 }
                                             }
 
-                                            AccountSelectorMenu(
-                                                expanded = showAccountMenu,
-                                                onDismiss = { showAccountMenu = false },
-                                                vm = viewModel,
-                                                onAddAccount = {
-                                                    showAccountMenu = false
-                                                    if (Nip55.isSignerAvailable(this@MainActivity)) {
-                                                        getPublicKeyLauncher.launch(
-                                                            GetPublicKeyContract.Input(
-                                                                permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(24242), Permission.signEvent(20), Permission.signEvent(22)) 
-                                                            )
-                                                        )
-                                                    } else {
-                                                         Toast.makeText(this@MainActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
-                                                    }
+                                            // 3. Scheduled
+                                            val isSchedSelected = initialTab == 1
+                                            IconButton(
+                                                onClick = {
+                                                    initialTab = 1
                                                 },
-                                                onSwitchAccount = { pubkey ->
-                                                    showAccountMenu = false
-                                                    viewModel.switchUser(pubkey)
+                                                modifier = Modifier.weight(1f).padding(bottom = 6.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(CircleShape)
+                                                        .background(if (isSchedSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    BadgedBox(
+                                                        badge = {
+                                                            if (scheduledCount.isNotEmpty()) {
+                                                                Badge { Text(scheduledCount.size.toString()) }
+                                                            }
+                                                        }
+                                                    ) {
+                                                        Icon(Icons.Default.Schedule, "Scheduled", Modifier.size(32.dp), tint = if (isSchedSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    }
                                                 }
-                                            )
-                                        }
-                                    },
-                                    title = {
-                                        Icon(
-                                            painter = painterResource(id = R.drawable.ic_prism_triangle),
-                                            contentDescription = "Prism",
-                                            modifier = Modifier.size(32.dp),
-                                            tint = Color.Unspecified
-                                        )
-                                    },
-                                    actions = {
-                                        IconButton(onClick = {
-                                            if (viewModel.isHapticEnabled()) {
-                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                             }
-                                            startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
-                                        }) {
-                                            Icon(Icons.Default.Settings, "Settings")
+
+                                            // 4. History
+                                            val isHistorySelected = initialTab == 2
+                                            IconButton(
+                                                onClick = {
+                                                    initialTab = 2
+                                                },
+                                                modifier = Modifier.weight(1f).padding(bottom = 6.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(CircleShape)
+                                                        .background(if (isHistorySelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(Icons.Default.History, "History", Modifier.size(32.dp), tint = if (isHistorySelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                            }
+
+                                            // 5. Settings
+                                            IconButton(
+                                                onClick = {
+                                                    if (viewModel.isHapticEnabled()) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                    startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+                                                },
+                                                modifier = Modifier.weight(1f).padding(bottom = 6.dp)
+                                            ) {
+                                                Icon(Icons.Default.Settings, "Settings", Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+
+                                            // 6. User
+                                            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                                IconButton(
+                                                    onClick = {
+                                                        if (viewModel.isHapticEnabled()) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                        showAccountMenu = true
+                                                    },
+                                                    modifier = Modifier.align(Alignment.Center).padding(bottom = 6.dp)
+                                                ) {
+                                                    Box(modifier = Modifier.size(32.dp)) {
+                                                        if (viewModel.userProfile?.pictureUrl != null) {
+                                                            AsyncImage(
+                                                                model = viewModel.userProfile!!.pictureUrl,
+                                                                contentDescription = "User Avatar",
+                                                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                                                contentScale = ContentScale.Crop
+                                                            )
+                                                        } else {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Person,
+                                                                contentDescription = "User",
+                                                                modifier = Modifier.fillMaxSize(),
+                                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                            )
+                                                        }
+                                                    }
+                                                }
+
+                                                Box(modifier = Modifier.align(Alignment.TopEnd).size(1.dp)) {
+                                                    AccountSelectorMenu(
+                                                        expanded = showAccountMenu,
+                                                        onDismiss = { showAccountMenu = false },
+                                                        vm = viewModel,
+                                                        onAddAccount = {
+                                                            showAccountMenu = false
+                                                            if (Nip55.isSignerAvailable(this@MainActivity)) {
+                                                                getPublicKeyLauncher.launch(
+                                                                    GetPublicKeyContract.Input(
+                                                                        permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(24242), Permission.signEvent(20), Permission.signEvent(22)) 
+                                                                    )
+                                                                )
+                                                            } else {
+                                                                 Toast.makeText(this@MainActivity, "No NIP-55 Signer app found.", Toast.LENGTH_LONG).show()
+                                                            }
+                                                        },
+                                                        onSwitchAccount = { pubkey ->
+                                                            showAccountMenu = false
+                                                            viewModel.switchUser(pubkey)
+                                                        },
+                                                        addAccountAtTop = true
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
-                                )
-                            },
-                            floatingActionButton = {
-                                val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-                                FloatingActionButton(
-                                    onClick = {
-                                        if (viewModel.isHapticEnabled()) {
-                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        }
-                                        val intent = Intent(this@MainActivity, ProcessTextActivity::class.java)
-                                        intent.putExtra("LAUNCH_MODE", "NOTE")
-                                        startActivity(intent)
-                                    },
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary
-                                ) {
-                                    Icon(Icons.Default.Add, "New Note")
                                 }
-                            }
                         ) { padding ->
                             Box(modifier = Modifier.padding(padding)) {
-                                DraftsHistoryContent(
+                                com.ryans.nostrshare.ui.DraftsHistoryList(
                                     vm = viewModel,
-                                    initialTab = initialTab,
+                                    selectedTab = initialTab,
                                     onEditDraft = { draft ->
                                         val intent = Intent(this@MainActivity, ProcessTextActivity::class.java)
                                         intent.putExtra("DRAFT_ID", draft.id)

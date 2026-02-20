@@ -86,11 +86,10 @@ fun DraftsHistoryContent(
     onSaveToDrafts: (Draft) -> Unit,
     onOpenInClient: (String) -> Unit
 ) {
+    var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab) }
     val drafts by vm.drafts.collectAsState(initial = emptyList<Draft>())
     val allScheduled by vm.allScheduled.collectAsState(initial = emptyList<Draft>())
     val scheduledHistory by vm.scheduledHistory.collectAsState(initial = emptyList<Draft>())
-    var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab) }
-    var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TabRow(
@@ -117,30 +116,54 @@ fun DraftsHistoryContent(
             }
         }
 
-        Box(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            when (selectedTab) {
-                0 -> DraftList(drafts, onSelect = onEditDraft, onDelete = {
-                    vm.deleteDraft(it.id)
-                }, vm = vm, onMediaClick = { showMediaDetail = it })
-                1 -> ScheduledList(allScheduled, vm = vm, onCancel = {
-                    vm.cancelScheduledNote(it)
-                }, onEditAndReschedule = onEditAndReschedule, onSaveToDrafts = onSaveToDrafts, onMediaClick = { showMediaDetail = it })
-                2 -> HistoryList(
-                    history = scheduledHistory,
-                    vm = vm,
-                    onClearHistory = { vm.clearScheduledHistory() },
-                    onOpenInClient = onOpenInClient,
-                    onMediaClick = { showMediaDetail = it }
-                )
-            }
-            
-            showMediaDetail?.let { item ->
-                MediaDetailDialog(
-                    item = item,
-                    vm = vm,
-                    onDismiss = { showMediaDetail = null }
-                )
-            }
+        DraftsHistoryList(
+            vm = vm,
+            selectedTab = selectedTab,
+            onEditDraft = onEditDraft,
+            onEditAndReschedule = onEditAndReschedule,
+            onSaveToDrafts = onSaveToDrafts,
+            onOpenInClient = onOpenInClient
+        )
+    }
+}
+
+@Composable
+fun DraftsHistoryList(
+    vm: ProcessTextViewModel,
+    selectedTab: Int,
+    onEditDraft: (Draft) -> Unit,
+    onEditAndReschedule: (Draft) -> Unit,
+    onSaveToDrafts: (Draft) -> Unit,
+    onOpenInClient: (String) -> Unit
+) {
+    val drafts by vm.drafts.collectAsState(initial = emptyList<Draft>())
+    val allScheduled by vm.allScheduled.collectAsState(initial = emptyList<Draft>())
+    val scheduledHistory by vm.scheduledHistory.collectAsState(initial = emptyList<Draft>())
+    var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
+
+    Box(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        when (selectedTab) {
+            0 -> DraftList(drafts, onSelect = onEditDraft, onDelete = {
+                vm.deleteDraft(it.id)
+            }, vm = vm, onMediaClick = { showMediaDetail = it })
+            1 -> ScheduledList(allScheduled, vm = vm, onCancel = {
+                vm.cancelScheduledNote(it)
+            }, onEditAndReschedule = onEditAndReschedule, onSaveToDrafts = onSaveToDrafts, onMediaClick = { showMediaDetail = it })
+            2 -> HistoryList(
+                history = scheduledHistory,
+                vm = vm,
+                onClearHistory = { vm.clearScheduledHistory() },
+                onOpenInClient = onOpenInClient,
+                onMediaClick = { showMediaDetail = it }
+            )
+        }
+        
+        showMediaDetail?.let { item ->
+            MediaDetailDialog(
+                item = item,
+                vm = vm,
+                onDismiss = { showMediaDetail = null }
+            )
         }
     }
 }
