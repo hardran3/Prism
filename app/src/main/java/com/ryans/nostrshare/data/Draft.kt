@@ -33,5 +33,9 @@ data class Draft(
     val previewImageUrl: String? = null,
     val previewSiteName: String? = null,
     val highlightAuthorName: String? = null,
-    val highlightAuthorAvatarUrl: String? = null
-)
+    val highlightAuthorAvatarUrl: String? = null,
+    val isRemoteCache: Boolean = false
+) {
+    @Ignore var isRemote: Boolean = false
+    val isQuote: Boolean get() = kind == 1 && com.ryans.nostrshare.NostrUtils.hasQuoteLink(content)
+}

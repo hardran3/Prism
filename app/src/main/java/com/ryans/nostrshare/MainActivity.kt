@@ -290,6 +290,12 @@ class MainActivity : ComponentActivity() {
                                         } catch (e: Exception) {
                                             Toast.makeText(this@MainActivity, "No Nostr client found.", Toast.LENGTH_SHORT).show()
                                         }
+                                    },
+                                    onRepost = { draft ->
+                                        val intent = Intent(this@MainActivity, ProcessTextActivity::class.java)
+                                        intent.putExtra("REPOST_EVENT_JSON", draft.originalEventJson)
+                                        intent.putExtra("LAUNCH_MODE", "REPOST")
+                                        startActivity(intent)
                                     }
                                 )
                             }

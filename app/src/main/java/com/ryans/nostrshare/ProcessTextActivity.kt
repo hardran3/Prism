@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.History
 import androidx.compose.animation.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
@@ -265,7 +266,12 @@ class ProcessTextActivity : ComponentActivity() {
                     if (!viewModel.isOnboarded) {
                         com.ryans.nostrshare.ui.OnboardingScreen(viewModel, getPublicKeyLauncher)
                     } else {
-                        ShareScreen(viewModel)
+                        val isRepost = intent.getStringExtra("LAUNCH_MODE") == "REPOST"
+                        if (isRepost && viewModel.originalEventJson == null) {
+                            viewModel.originalEventJson = intent.getStringExtra("REPOST_EVENT_JSON")
+                            viewModel.setKind(ProcessTextViewModel.PostKind.REPOST)
+                        }
+                        ShareScreen(viewModel, isRepost)
                     }
 
                     if (showExactAlarmDialog) {
@@ -302,9 +308,9 @@ class ProcessTextActivity : ComponentActivity() {
         }
     }
     
-    @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
+    @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
     @Composable
-    fun ShareScreen(vm: ProcessTextViewModel) {
+    fun ShareScreen(vm: ProcessTextViewModel, initialShowDatePicker: Boolean = false) {
         val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
         val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -334,7 +340,7 @@ class ProcessTextActivity : ComponentActivity() {
 
         var showConfirmClear by remember { mutableStateOf(false) }
         var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
-        var showDatePicker by remember { mutableStateOf(false) }
+        var showDatePicker by remember { mutableStateOf(initialShowDatePicker) }
         var showTimePicker by remember { mutableStateOf(false) }
         var showQuickScheduleOptions by remember { mutableStateOf(false) }
         var tempDateMillis by remember { mutableStateOf<Long?>(null) }
@@ -469,6 +475,16 @@ class ProcessTextActivity : ComponentActivity() {
                         }
                     },
                     actions = {
+                        // History Button
+                        IconButton(onClick = {
+                            if (vm.isHapticEnabled()) {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            }
+                            vm.showDraftsHistory = true
+                        }) {
+                             Icon(Icons.Default.History, "History")
+                        }
+
                         // Settings - Small
                         IconButton(onClick = {
                             if (vm.isHapticEnabled()) {
@@ -1104,6 +1120,36 @@ class ProcessTextActivity : ComponentActivity() {
                         title = { Text("Select Time") },
                         text = {
                             TimePicker(state = timePickerState)
+                        }
+                    )
+                }
+
+                if (vm.showDraftsHistory) {
+                    DraftsDialog(
+                        vm = vm,
+                        onDismiss = { vm.showDraftsHistory = false },
+                        onEditAndReschedule = { draft ->
+                            vm.showDraftsHistory = false
+                            vm.loadDraftById(draft.id)
+                        },
+                        onSaveToDrafts = { draft ->
+                            // Already in history/scheduled
+                        },
+                        onOpenInClient = { url ->
+                            try {
+                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                startActivity(intent)
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(this@ProcessTextActivity, "No app to open this link.", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onRepost = { draft ->
+                            vm.showDraftsHistory = false
+                            // Repost Logic
+                            vm.setKind(com.ryans.nostrshare.ProcessTextViewModel.PostKind.REPOST)
+                            vm.originalEventJson = draft.originalEventJson
+                            // Trigger date picker
+                            showDatePicker = true
                         }
                     )
                 }

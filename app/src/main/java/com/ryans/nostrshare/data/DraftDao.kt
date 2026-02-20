@@ -5,14 +5,26 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DraftDao {
-    @Query("SELECT * FROM drafts WHERE isScheduled = 0 AND isAutoSave = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY lastEdited DESC")
+    @Query("SELECT * FROM drafts WHERE isScheduled = 0 AND isAutoSave = 0 AND isRemoteCache = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY lastEdited DESC")
     fun getAllDrafts(pubkey: String?): Flow<List<Draft>>
 
-    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY isOfflineRetry DESC, scheduledAt ASC")
+    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 0 AND isRemoteCache = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY isOfflineRetry DESC, scheduledAt ASC")
     fun getAllScheduled(pubkey: String?): Flow<List<Draft>>
 
-    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 1 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY scheduledAt DESC")
+    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 1 AND isRemoteCache = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY scheduledAt DESC")
     fun getScheduledHistory(pubkey: String?): Flow<List<Draft>>
+    
+    @Query("SELECT * FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey ORDER BY actualPublishedAt DESC")
+    fun getRemoteHistory(pubkey: String): Flow<List<Draft>>
+
+    @Query("SELECT MAX(actualPublishedAt) FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey")
+    suspend fun getMaxRemoteTimestamp(pubkey: String): Long?
+
+    @Query("SELECT MIN(actualPublishedAt) FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey")
+    suspend fun getMinRemoteTimestamp(pubkey: String): Long?
+
+    @Query("DELETE FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey")
+    suspend fun deleteRemoteHistory(pubkey: String)
 
     @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 0")
     suspend fun getScheduledDrafts(): List<Draft>

@@ -30,16 +30,16 @@ class RelayManager(
         "wss://nostr.mom"
     )
 
-    suspend fun fetchRelayList(pubkey: String): List<String> = withContext(Dispatchers.IO) {
+    suspend fun fetchRelayList(pubkey: String, isRead: Boolean = true): List<String> = withContext(Dispatchers.IO) {
         val relayList = mutableSetOf<String>()
-        val latch = CountDownLatch(1) // Wait for at least one valid response or timeout
-
-        if (settingsRepository.isBlastrEnabled(pubkey)) {
+        if (!isRead && settingsRepository.isBlastrEnabled(pubkey)) {
             relayList.add("wss://sendit.nosflare.com/")
         }
 
         // Try indexers first as they are most reliable forKind 10002
         val targetRelays = indexerRelays + bootstrapRelays
+        val latch = CountDownLatch(targetRelays.size)
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
         
         for (url in targetRelays) {
             val request = Request.Builder().url(url).build()
@@ -84,17 +84,19 @@ class RelayManager(
                             latch.countDown()
                         } else if (type == "EOSE" && json.optString(1) == subId) {
                            webSocket.close(1000, "EOSE")
+                           latch.countDown()
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                        latch.countDown()
                     }
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                     // Fail silently for now
+                     latch.countDown()
                 }
             }
-            client.newWebSocket(request, listener)
+            activeSockets.add(client.newWebSocket(request, listener))
         }
         
         try {
@@ -103,6 +105,7 @@ class RelayManager(
             // Timeout
         }
         
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         if (relayList.isEmpty()) {
             return@withContext bootstrapRelays 
         }
@@ -112,7 +115,7 @@ class RelayManager(
     suspend fun publishEvent(signedEventJson: String, relays: List<String>): Map<String, Boolean> = withContext(Dispatchers.IO) {
         val results = mutableMapOf<String, Boolean>()
         val latch = CountDownLatch(relays.size)
-        
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
         for (url in relays) {
             val request = Request.Builder().url(url).build()
              val listener = object : WebSocketListener() {
@@ -162,7 +165,7 @@ class RelayManager(
                      }
                  }
              } // Correctly close the WebSocketListener object here
-             client.newWebSocket(request, listener)
+             activeSockets.add(client.newWebSocket(request, listener))
         }
 
         try {
@@ -171,12 +174,14 @@ class RelayManager(
             // Timeout
         }
         
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         return@withContext results
     }
 
     suspend fun fetchUserProfile(pubkey: String): UserProfile? = withContext(Dispatchers.IO) {
         val result = java.util.concurrent.atomic.AtomicReference<UserProfile?>(null)
         val latch = CountDownLatch(1)
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
         val checkedRelays = java.util.Collections.synchronizedSet(HashSet<String>())
         
         fun search(url: String) {
@@ -228,12 +233,16 @@ class RelayManager(
                     // Fail silently
                 }
             }
-            client.newWebSocket(request, listener)
+            activeSockets.add(client.newWebSocket(request, listener))
         }
 
         // 1. Race bootstrap + indexers immediately
-        val targetRelays = (indexerRelays + bootstrapRelays).distinct()
-        targetRelays.forEach { search(it) }
+        val targetRelays = mutableListOf<String>().apply { addAll(indexerRelays + bootstrapRelays) }
+        if (settingsRepository.isCitrineRelayEnabled(pubkey)) {
+            targetRelays.add("ws://127.0.0.1:4869")
+        }
+        val uniqueTargetRelays = targetRelays.distinct()
+        uniqueTargetRelays.forEach { search(it) }
         
         // 2. Async: Fetch Author NIP-65 Relays and race them too
         launch {
@@ -249,6 +258,7 @@ class RelayManager(
             latch.await(5, TimeUnit.SECONDS)
         } catch (_: InterruptedException) { }
         
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         return@withContext result.get()
     }
     
@@ -265,7 +275,7 @@ class RelayManager(
         
         for (chunk in chunks) {
             val latch = CountDownLatch(indexerRelays.size)
-            
+            val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
             for (url in indexerRelays) {
                 val request = Request.Builder().url(url).build()
                 val listener = object : WebSocketListener() {
@@ -322,7 +332,7 @@ class RelayManager(
                         latch.countDown()
                     }
                 }
-                client.newWebSocket(request, listener)
+                activeSockets.add(client.newWebSocket(request, listener))
             }
             
             try {
@@ -338,7 +348,7 @@ class RelayManager(
         val serverList = mutableListOf<String>()
         var latestTimestamp = 0L
         val latch = CountDownLatch(indexerRelays.size + bootstrapRelays.size)
-        
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
         val targetRelays = indexerRelays + bootstrapRelays
 
         for (url in targetRelays) {
@@ -394,19 +404,21 @@ class RelayManager(
                      latch.countDown()
                 }
             }
-            client.newWebSocket(request, listener)
+            activeSockets.add(client.newWebSocket(request, listener))
         }
         
         try {
             latch.await(5, TimeUnit.SECONDS)
         } catch (e: InterruptedException) { }
         
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         return@withContext serverList.toList()
     }
 
     suspend fun fetchContactList(pubkey: String, relays: List<String> = emptyList()): Set<String> = withContext(Dispatchers.IO) {
         val follows = mutableSetOf<String>()
         val latch = CountDownLatch(1)
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
         val targetRelays = if (relays.isNotEmpty()) relays else (indexerRelays + bootstrapRelays)
 
         for (url in targetRelays) {
@@ -457,14 +469,101 @@ class RelayManager(
                      latch.countDown()
                 }
             }
-            client.newWebSocket(request, listener)
+            activeSockets.add(client.newWebSocket(request, listener))
         }
         
         try {
             latch.await(5, TimeUnit.SECONDS)
         } catch (_: InterruptedException) { }
         
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         return@withContext follows
+    }
+
+    suspend fun fetchUserNotes(pubkey: String, kinds: List<Int>, relays: List<String> = emptyList(), since: Long? = null, until: Long? = null, limit: Int = 100): List<JSONObject> = withContext(Dispatchers.IO) {
+        val notes = mutableListOf<JSONObject>()
+        // Use user's outbox relays (kind 10002) if available, fallback to indexers
+        val userRelays = if (relays.isEmpty()) fetchRelayList(pubkey) else emptyList()
+        val baseRelays = if (relays.isNotEmpty()) relays else if (userRelays.isNotEmpty()) userRelays else (indexerRelays + bootstrapRelays).distinct()
+        
+        val targetRelays = mutableListOf<String>().apply { addAll(baseRelays) }
+        if (settingsRepository.isCitrineRelayEnabled(pubkey) || settingsRepository.isCitrineRelayEnabled()) {
+            targetRelays.add("ws://127.0.0.1:4869")
+        }
+        val uniqueTargetRelays = targetRelays.distinct()
+        android.util.Log.d("RelayManager", "Fetching notes from relays: $uniqueTargetRelays")
+        
+        val latch = CountDownLatch(uniqueTargetRelays.size)
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
+        
+        for (url in uniqueTargetRelays) {
+            val request = Request.Builder().url(url).build()
+            val listener = object : WebSocketListener() {
+                val subId = UUID.randomUUID().toString()
+                
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    val filter = JSONObject()
+                    if (kinds.isNotEmpty()) {
+                        val kindsArray = JSONArray()
+                        kinds.forEach { kindsArray.put(it) }
+                        filter.put("kinds", kindsArray)
+                    }
+                    filter.put("authors", JSONArray().put(pubkey))
+                    if (since != null) {
+                        filter.put("since", since)
+                    }
+                    if (until != null) {
+                        filter.put("until", until)
+                    }
+                    filter.put("limit", limit)
+                    
+                    val req = JSONArray()
+                    req.put("REQ")
+                    req.put(subId)
+                    req.put(filter)
+                    webSocket.send(req.toString())
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val json = JSONArray(text)
+                        val type = json.optString(0)
+                        if (type == "EVENT" && json.optString(1) == subId) {
+                            val event = json.getJSONObject(2)
+                            
+                            synchronized(notes) {
+                                // Avoid duplicates
+                                if (notes.none { it.optString("id") == event.optString("id") }) {
+                                    notes.add(event)
+                                }
+                            }
+                        } else if (type == "EOSE" && json.optString(1) == subId) {
+                            webSocket.close(1000, "EOSE")
+                            latch.countDown()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    android.util.Log.e("RelayManager", "WebSocket failure on ${request.url}: ${t.message}", t)
+                    latch.countDown()
+                }
+                
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    latch.countDown()
+                }
+            }
+            activeSockets.add(client.newWebSocket(request, listener))
+        }
+        
+        try {
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) { }
+        
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
+        return@withContext notes.sortedByDescending { it.optLong("created_at", 0L) }
     }
 
     suspend fun fetchEvent(eventId: String, relays: List<String> = emptyList(), authorPubkey: String? = null): JSONObject? = withContext(Dispatchers.IO) {
@@ -472,6 +571,7 @@ class RelayManager(
         
         val result = java.util.concurrent.atomic.AtomicReference<JSONObject?>(null)
         val latch = CountDownLatch(1)
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
         val checkedRelays = java.util.Collections.synchronizedSet(HashSet<String>())
         
         // Helper to launch a search on a specific relay
@@ -518,12 +618,16 @@ class RelayManager(
                      // Fail silently
                 }
             }
-            client.newWebSocket(request, listener)
+            activeSockets.add(client.newWebSocket(request, listener))
         }
         
         // 1. Race provided relays + bootstrap + indexers immediately
-        val initialRelays = (relays + bootstrapRelays + indexerRelays).distinct()
-        initialRelays.forEach { search(it) }
+        val initialRelays = mutableListOf<String>().apply { addAll(relays + bootstrapRelays + indexerRelays) }
+        if (settingsRepository.isCitrineRelayEnabled(authorPubkey) || settingsRepository.isCitrineRelayEnabled()) {
+             initialRelays.add("ws://127.0.0.1:4869")
+         }
+        val uniqueInitialRelays = initialRelays.distinct()
+        uniqueInitialRelays.forEach { search(it) }
         
         // 2. Async: Fetch Author NIP-65 Relays and race them too
         if (authorPubkey != null) {
@@ -541,6 +645,7 @@ class RelayManager(
             latch.await(5, TimeUnit.SECONDS)
         } catch (e: InterruptedException) { }
         
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         return@withContext result.get()
     }
 
@@ -550,6 +655,7 @@ class RelayManager(
         
         val result = java.util.concurrent.atomic.AtomicReference<JSONObject?>(null)
         val latch = CountDownLatch(1)
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
         val checkedRelays = java.util.Collections.synchronizedSet(HashSet<String>())
         
         fun search(url: String) {
@@ -597,7 +703,7 @@ class RelayManager(
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 }
             }
-            client.newWebSocket(request, listener)
+            activeSockets.add(client.newWebSocket(request, listener))
         }
         
         // 1. Race provided relays + bootstrap + indexers
@@ -618,6 +724,7 @@ class RelayManager(
             latch.await(5, TimeUnit.SECONDS)
         } catch (e: InterruptedException) { }
         
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         return@withContext result.get()
     }
     
@@ -629,7 +736,7 @@ class RelayManager(
         )
         val results = mutableMapOf<String, UserProfile>()
         val latch = CountDownLatch(searchRelays.size)
-
+        val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
         for (url in searchRelays) {
             val request = Request.Builder().url(url).build()
             val listener = object : WebSocketListener() {
@@ -679,6 +786,7 @@ class RelayManager(
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                     android.util.Log.e("RelayManager", "WebSocket failure on ${request.url}: ${t.message}", t)
                      latch.countDown()
                 }
 
@@ -688,13 +796,14 @@ class RelayManager(
                     }
                 }
             }
-            client.newWebSocket(request, listener)
+            activeSockets.add(client.newWebSocket(request, listener))
         }
         
         try {
             latch.await(5, TimeUnit.SECONDS)
         } catch (e: InterruptedException) { }
         
+        activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         return@withContext results.toList()
     }
 

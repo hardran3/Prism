@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import java.util.UUID
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
@@ -16,11 +17,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import androidx.compose.runtime.snapshotFlow
 import android.net.Uri
 import java.io.File
 import org.json.JSONObject
+import org.json.JSONArray
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import com.ryans.nostrshare.data.Draft
@@ -106,6 +111,328 @@ class ProcessTextViewModel : ViewModel() {
         .flatMapLatest { pk ->
             draftDao.getScheduledHistory(pk)
         }
+        
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val remoteHistory = snapshotFlow { pubkey }
+        .flatMapLatest { pk ->
+            if (pk != null) {
+                draftDao.getRemoteHistory(pk).map { list ->
+                    list.onEach { it.isRemote = true }
+                    list
+                }
+            } else {
+                flowOf(emptyList<Draft>())
+            }
+        }
+    @OptIn(ExperimentalCoroutinesApi::class)
+
+    var isFetchingRemoteHistory by mutableStateOf(false)
+    var hasReachedEndOfRemoteHistory by mutableStateOf(false)
+    var remoteHistoryCursor by mutableStateOf<Long?>(null)
+
+    fun fetchRemoteHistory() {
+        val currentPk = pubkey ?: return
+        viewModelScope.launch {
+            try {
+                isFetchingRemoteHistory = true
+                hasReachedEndOfRemoteHistory = false
+                remoteHistoryCursor = null
+                
+                val lastTimestamp = withContext(Dispatchers.IO) {
+                    draftDao.getMaxRemoteTimestamp(currentPk)
+                }
+
+                val kinds = listOf(1, 6, 16, 20, 22, 9802)
+                
+                val notes = relayManager.fetchUserNotes(currentPk, kinds, since = lastTimestamp?.let { it / 1000 + 1 })
+                
+                withContext(Dispatchers.IO) {
+                    notes.forEach { json ->
+                        // Filter out replies before saving to DB
+                        var isReply = false
+                        if (json.optInt("kind") == 1) {
+                            val tags = json.optJSONArray("tags")
+                            if (tags != null) {
+                                for (i in 0 until tags.length()) {
+                                    val tag = tags.optJSONArray(i)
+                                    if (tag != null && tag.length() >= 2) {
+                                        val tagName = tag.optString(0)
+                                        if (tagName == "e" || tagName == "a") {
+                                            val marker = if (tag.length() >= 4) tag.optString(3) else ""
+                                            if (marker == "reply" || marker == "root") {
+                                                isReply = true
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (!isReply) {
+                            insertRemoteNote(json, currentPk)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isFetchingRemoteHistory = false
+            }
+        }
+    }
+
+    fun loadMoreRemoteHistory() {
+        val currentPk = pubkey ?: return
+        if (isFetchingRemoteHistory || hasReachedEndOfRemoteHistory) return
+        
+        viewModelScope.launch {
+            try {
+                isFetchingRemoteHistory = true
+                
+                val oldestTimestamp = remoteHistoryCursor ?: withContext(Dispatchers.IO) {
+                    draftDao.getMinRemoteTimestamp(currentPk)
+                } ?: System.currentTimeMillis()
+
+                val kinds = listOf(1, 6, 16, 20, 22, 9802)
+                
+                val notes = relayManager.fetchUserNotes(
+                    currentPk, 
+                    kinds, 
+                    until = oldestTimestamp / 1000 - 1,
+                    limit = 100
+                )
+                
+                if (notes.isEmpty()) {
+                    hasReachedEndOfRemoteHistory = true
+                } else {
+                    // Update cursor before filtering so we can paginate past a block of filtered replies
+                    val minFetchedTimestamp = notes.minOfOrNull { it.optLong("created_at") }?.let { it * 1000 }
+                    if (minFetchedTimestamp != null) {
+                        remoteHistoryCursor = minFetchedTimestamp
+                    }
+                    
+                    withContext(Dispatchers.IO) {
+                        notes.forEach { json ->
+                            // Filter out replies before saving to DB
+                            var isReply = false
+                            if (json.optInt("kind") == 1) {
+                                val tags = json.optJSONArray("tags")
+                                if (tags != null) {
+                                    for (i in 0 until tags.length()) {
+                                        val tag = tags.optJSONArray(i)
+                                        if (tag != null && tag.length() >= 2) {
+                                            val tagName = tag.optString(0)
+                                            if (tagName == "e" || tagName == "a") {
+                                                val marker = if (tag.length() >= 4) tag.optString(3) else ""
+                                                if (marker == "reply" || marker == "root") {
+                                                    isReply = true
+                                                    break
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if (!isReply) {
+                                insertRemoteNote(json, currentPk)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isFetchingRemoteHistory = false
+            }
+        }
+    }
+
+    private suspend fun insertRemoteNote(json: JSONObject, currentPk: String) {
+        val kind = json.optInt("kind")
+        val kindEnum = PostKind.entries.find { it.kind == kind }
+        var content = json.optString("content", "")
+        val eventId = json.optString("id")
+        val createdAt = json.optLong("created_at") * 1000L
+        val tagsArray = json.optJSONArray("tags") ?: JSONArray()
+        
+        var sourceUrl = ""
+        var mediaJson = "[]"
+        var repostOriginalEventJson: String? = null
+        var previewTitle: String? = null
+        
+        // Extract data from tags
+        val tags = mutableListOf<List<String>>()
+        for (i in 0 until tagsArray.length()) {
+            val tag = tagsArray.optJSONArray(i)
+            if (tag != null) {
+                val tagList = mutableListOf<String>()
+                for (j in 0 until tag.length()) {
+                    tagList.add(tag.optString(j))
+                }
+                tags.add(tagList)
+            }
+        }
+
+        // Multi-Media Extraction: Harvest ALL media tags for grid support across all kinds
+        val extractedMedia = mutableListOf<Pair<String, String?>>() // url to optional mime
+        tags.forEach { tag ->
+            if (tag.size >= 2) {
+                when (tag[0]) {
+                    "url", "image", "thumb" -> extractedMedia.add(tag[1] to null)
+                    "imeta" -> {
+                        val url = tag.find { it.startsWith("url ") }?.removePrefix("url ")
+                        val mime = tag.find { it.startsWith("m ") }?.removePrefix("m ")
+                        if (url != null) extractedMedia.add(url to mime)
+                    }
+                }
+            }
+        }
+        val uniqueMedia = extractedMedia.filter { it.first.isNotBlank() }.distinctBy { it.first }
+        if (uniqueMedia.isNotEmpty()) {
+            val mediaArray = JSONArray()
+            uniqueMedia.forEach { (url, tagMime) ->
+                val mediaObj = JSONObject()
+                mediaObj.put("id", UUID.randomUUID().toString())
+                mediaObj.put("uri", url)
+                mediaObj.put("uploadedUrl", url)
+                // Determine mimeType: imeta m tag > URL extension > kind fallback
+                val detectedMime = tagMime ?: run {
+                    val lc = url.lowercase().substringBefore("?")
+                    when {
+                        lc.endsWith(".mp4") || lc.endsWith(".mov") || lc.endsWith(".webm") || lc.endsWith(".avi") || lc.endsWith(".mkv") -> "video/mp4"
+                        lc.endsWith(".gif") -> "image/gif"
+                        lc.endsWith(".png") -> "image/png"
+                        lc.endsWith(".webp") -> "image/webp"
+                        lc.endsWith(".svg") -> "image/svg+xml"
+                        kind == 22 -> "video/mp4"
+                        else -> "image/jpeg"
+                    }
+                }
+                mediaObj.put("mimeType", detectedMime)
+                mediaArray.put(mediaObj)
+            }
+            mediaJson = mediaArray.toString()
+        }
+
+        when (kind) {
+            1 -> {
+                // Standard notes: try to extract a sourceUrl if missing
+                if (sourceUrl.isBlank()) {
+                    sourceUrl = tags.find { it.size >= 2 && (it[0] == "r" || it[0] == "u" || (it[0].length == 1 && it[1].startsWith("http"))) }?.get(1) ?: ""
+                }
+            }
+            6, 16 -> {
+                // Reposts: extract the inner event and always resolve the e-tag
+                val eTag = tags.find { it.size >= 2 && it[0] == "e" }
+                
+                // If content is the inner event JSON, save it for originalEventJson
+                if (content.startsWith("{")) {
+                    repostOriginalEventJson = content
+                }
+                
+                // Always set sourceUrl from e-tag for UI resolution
+                if (eTag != null) {
+                    try {
+                        val relayHint = if (eTag.size >= 3) eTag[2].takeIf { it.startsWith("wss://") } else null
+                        val noteBech32 = NostrUtils.eventIdToNevent(eTag[1], relayHint)
+                        sourceUrl = "nostr:$noteBech32"
+                    } catch (e: Exception) {
+                        sourceUrl = "nostr:${eTag[1]}" 
+                    }
+                }
+            }
+            20, 22 -> {
+                val uniqueMediaUrls = uniqueMedia.map { it.first }
+                if (uniqueMediaUrls.isNotEmpty()) {
+                    if (content.isBlank()) {
+                        content = tags.find { it.size >= 2 && it[0] == "alt" }?.get(1) ?: ""
+                    }
+                    // Ensure each media URL is mentioned in content so IntegratedContent groups them
+                    uniqueMediaUrls.forEach { url ->
+                        if (!content.contains(url, ignoreCase = true)) {
+                            content = if (content.isBlank()) url else "$content $url"
+                        }
+                    }
+                    if (sourceUrl.isBlank()) sourceUrl = uniqueMediaUrls[0]
+                }
+            }
+            9802 -> {
+                // Highlights: Standard NIP-84 uses 'r' or 'u'
+                var rTag = tags.find { it.size >= 2 && (it[0] == "r" || it[0] == "u") }
+                
+                // CATCH-ALL: If nothing standard, scan all tags for something that looks like a URL
+                if (rTag == null) {
+                    rTag = tags.find { it.size >= 2 && it[1].startsWith("http") }
+                }
+                
+                sourceUrl = rTag?.get(1) ?: ""
+                
+                if (content.isBlank()) {
+                    content = tags.find { it.size >= 2 && it[0] == "alt" }?.get(1) ?: ""
+                }
+                
+                // Ensure content has the URL for rendering if no highlight text exists
+                if (sourceUrl.startsWith("http")) {
+                    val urlRegex = "https?://[^\\s]+".toRegex()
+                    val hasUrl = urlRegex.findAll(content).any { NostrUtils.urlsMatch(it.value, sourceUrl) }
+                    if (!hasUrl) {
+                        content = if (content.isBlank()) sourceUrl else "$content\n\n$sourceUrl"
+                    }
+                }
+                previewTitle = tags.find { it.size >= 2 && it[0] == "title" }?.get(1)
+            }
+        }
+        
+        var previewDescription: String? = null
+        var previewImageUrl: String? = null
+        
+        tags.forEach { tag ->
+            if (tag.size >= 2) {
+                when (tag[0]) {
+                    "image", "thumb" -> if (previewImageUrl == null) previewImageUrl = tag[1]
+                    "description", "summary" -> if (previewDescription == null) previewDescription = tag[1]
+                }
+            }
+        }
+        
+        val draft = Draft(
+            id = eventId.hashCode(), // Int PK limit, hash is best we can do for now
+            content = content,
+            sourceUrl = sourceUrl,
+            kind = kindEnum?.kind ?: kind,
+            mediaJson = mediaJson,
+            mediaTitle = "",
+            originalEventJson = repostOriginalEventJson ?: json.toString(),
+            lastEdited = createdAt,
+            pubkey = currentPk,
+            isScheduled = false,
+            isCompleted = true,
+            isRemoteCache = true,
+            publishedEventId = eventId,
+            actualPublishedAt = createdAt,
+            previewTitle = previewTitle,
+            previewDescription = previewDescription,
+            previewImageUrl = previewImageUrl
+        )
+        draftDao.insertDraft(draft)
+        
+        // Background Pre-cache if metadata is still partial
+        if (sourceUrl.startsWith("http") && (previewImageUrl == null || previewDescription == null || previewTitle == null)) {
+            viewModelScope.launch {
+                com.ryans.nostrshare.utils.LinkPreviewManager.fetchMetadata(sourceUrl)?.let { meta ->
+                    val refreshed = draft.copy(
+                        previewTitle = meta.title ?: draft.previewTitle,
+                        previewDescription = meta.description ?: draft.previewDescription,
+                        previewImageUrl = meta.imageUrl ?: draft.previewImageUrl,
+                        previewSiteName = meta.siteName ?: draft.previewSiteName
+                    )
+                    draftDao.insertDraft(refreshed)
+                }
+            }
+        }
+    }
 
     var isUploading by mutableStateOf(false)
     var isDeleting by mutableStateOf(false)
@@ -263,6 +590,9 @@ class ProcessTextViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+            } finally {
+                // Automatically refresh remote history for the new/switched user
+                fetchRemoteHistory()
             }
         }
     }
@@ -1147,6 +1477,7 @@ class ProcessTextViewModel : ViewModel() {
     var showDraftPrompt by mutableStateOf(false)
     var currentDraftId: Int? = null
     var showDatePicker by mutableStateOf(false)
+    var showDraftsHistory by mutableStateOf(false)
     var isDraftMonitoringActive by mutableStateOf(false)
 
     fun clearContent() {
@@ -1397,6 +1728,10 @@ class ProcessTextViewModel : ViewModel() {
     fun setKind(kind: PostKind) {
         val oldKind = postKind
         postKind = kind
+        
+        if (kind == PostKind.REPOST && !availableKinds.contains(PostKind.REPOST)) {
+            availableKinds = availableKinds + PostKind.REPOST
+        }
         
         if (kind == PostKind.REPOST) {
             // Save current work and clear for Repost/Quote
@@ -1665,7 +2000,7 @@ class ProcessTextViewModel : ViewModel() {
             try {
                 val relaysToPublish = withContext(Dispatchers.IO) {
                     val baseRelays = try {
-                        val fetched = relayManager.fetchRelayList(pubkey!!)
+                        val fetched = relayManager.fetchRelayList(pubkey!!, isRead = false)
                         if (fetched.isEmpty()) listOf("wss://relay.damus.io", "wss://nos.lol") else fetched
                     } catch (e: Exception) {
                         listOf("wss://relay.damus.io", "wss://nos.lol")
@@ -1673,7 +2008,7 @@ class ProcessTextViewModel : ViewModel() {
                     
                     val combinedRelays = mutableListOf<String>().apply { addAll(baseRelays) }
                     if (settingsRepository.isCitrineRelayEnabled(pubkey)) {
-                        combinedRelays.add("ws://localhost:4869")
+                        combinedRelays.add("ws://127.0.0.1:4869")
                     }
                     combinedRelays.distinct() // Ensure no duplicate relays
                 }
@@ -1688,7 +2023,7 @@ class ProcessTextViewModel : ViewModel() {
                          relayManager.publishEvent(signedEvent, relaysToPublish)
                     }
                     // Count as success only if published to at least one non-localhost relay
-                    val nonLocalhostSuccess = results.filter { it.key != "ws://localhost:4869" }.any { it.value }
+                    val nonLocalhostSuccess = results.filter { it.key != "ws://127.0.0.1:4869" }.any { it.value }
                     if (nonLocalhostSuccess) {
                         totalPostSuccess++
                     }
@@ -1803,12 +2138,12 @@ class ProcessTextViewModel : ViewModel() {
             try {
                 val hexKey = pubkey ?: return@launch
                 val baseRelays = withContext(Dispatchers.IO) {
-                    relayManager.fetchRelayList(hexKey)
+                    relayManager.fetchRelayList(hexKey, isRead = false)
                 }
                 
                 val combinedRelays = mutableListOf<String>().apply { addAll(baseRelays) }
                 if (settingsRepository.isCitrineRelayEnabled(pubkey)) {
-                    combinedRelays.add("ws://localhost:4869")
+                    combinedRelays.add("ws://127.0.0.1:4869")
                 }
                 
                 val results = withContext(Dispatchers.IO) {

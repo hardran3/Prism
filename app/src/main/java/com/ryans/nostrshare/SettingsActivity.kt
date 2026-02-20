@@ -347,7 +347,7 @@ fun NostrSettingsTab(repo: SettingsRepository, pubkey: String?) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Citrine Local Relay", style = MaterialTheme.typography.bodyLarge)
-                Text("Post to ws://localhost:4869 (e.g., Citrine app)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Post to ws://127.0.0.1:4869 (e.g., Citrine app)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Switch(
                 checked = citrineRelayEnabled,

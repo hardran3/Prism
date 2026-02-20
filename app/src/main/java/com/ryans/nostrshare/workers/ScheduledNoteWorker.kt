@@ -140,7 +140,7 @@ class ScheduledNoteWorker(
 
             val targetRelays = mutableListOf<String>().apply { addAll(baseRelays) }
             if (settingsRepository.isCitrineRelayEnabled()) {
-                targetRelays.add("ws://localhost:4869")
+                targetRelays.add("ws://127.0.0.1:4869")
             }
             val finalRelays = targetRelays.distinct()
 
@@ -149,7 +149,7 @@ class ScheduledNoteWorker(
             // Publish
             val results = relayManager.publishEvent(signedJson, finalRelays)
             
-                val nonLocalhostSuccess = results.filter { it.key != "ws://localhost:4869" }.any { it.value }
+                val nonLocalhostSuccess = results.filter { it.key != "ws://127.0.0.1:4869" }.any { it.value }
                 if (nonLocalhostSuccess) {
                     com.ryans.nostrshare.utils.SchedulerLog.log(applicationContext, "ScheduledNoteWorker", "Success! Published to at least one non-localhost relay.")
                     // Success! Record status

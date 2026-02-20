@@ -38,6 +38,11 @@ object NostrUtils {
         return null
     }
 
+    private val QUOTE_PATTERN = Pattern.compile("(nevent1|note1|naddr1)[a-z0-9]+", Pattern.CASE_INSENSITIVE)
+    fun hasQuoteLink(content: String): Boolean {
+        return QUOTE_PATTERN.matcher(content).find()
+    }
+
     fun pubkeyToNpub(pubkey: String): String {
         return try {
             Bech32.encode("npub", pubkey.hexToBytes())
@@ -49,6 +54,29 @@ object NostrUtils {
     fun eventIdToNote(eventId: String): String {
         return try {
             Bech32.encode("note", eventId.hexToBytes())
+        } catch (e: Exception) {
+            eventId
+        }
+    }
+
+    fun eventIdToNevent(eventId: String, relayHint: String? = null): String {
+        return try {
+            val bytes = eventId.hexToBytes()
+            val tlv = mutableListOf<Byte>()
+            // Type 0: Event ID
+            tlv.add(0.toByte())
+            tlv.add(32.toByte())
+            bytes.forEach { tlv.add(it) }
+            
+            // Type 1: Relay Hint
+            relayHint?.let { url ->
+                val rBytes = url.toByteArray(Charsets.UTF_8)
+                tlv.add(1.toByte())
+                tlv.add(rBytes.size.toByte())
+                rBytes.forEach { tlv.add(it) }
+            }
+            
+            Bech32.encode("nevent", tlv.toByteArray())
         } catch (e: Exception) {
             eventId
         }
@@ -79,10 +107,25 @@ object NostrUtils {
         return when (kind) {
             1 -> "Text Note"
             9802 -> "Highlight"
-            6 -> if (content.isBlank()) "Repost" else "Quote Post"
-            0, 20, 22, 1063 -> "Media Note"
+            6, 16 -> "Repost"
+            20, 22 -> "Media Note"
             else -> "Kind $kind"
         }
+    }
+    
+    fun normalizeUrl(url: String): String {
+        return url.trim()
+            .lowercase()
+            .removeSuffix("/")
+            .removeSuffix(".")
+            .removeSuffix(",")
+            .removeSuffix(")")
+            .removeSuffix("!")
+    }
+    
+    fun urlsMatch(u1: String?, u2: String?): Boolean {
+        if (u1 == null || u2 == null) return false
+        return normalizeUrl(u1) == normalizeUrl(u2)
     }
 
     private fun parseNprofile(bytes: ByteArray, bech32: String): NostrEntity? {
