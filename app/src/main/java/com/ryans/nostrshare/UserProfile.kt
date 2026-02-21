@@ -3,7 +3,8 @@ package com.ryans.nostrshare
 data class UserProfile(
     val name: String?,
     val pictureUrl: String?,
-    val lud16: String? = null
+    val lud16: String? = null,
+    val createdAt: Long = 0L
 )
 
 data class Account(
@@ -11,5 +12,6 @@ data class Account(
     val npub: String?,
     val signerPackage: String?,
     val name: String?,
-    val pictureUrl: String?
+    val pictureUrl: String?,
+    val createdAt: Long = 0L
 )

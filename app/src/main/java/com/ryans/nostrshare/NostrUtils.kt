@@ -1,6 +1,8 @@
 package com.ryans.nostrshare
 
 import java.util.regex.Pattern
+import java.text.SimpleDateFormat
+import java.util.*
 
 object NostrUtils {
     data class NostrEntity(
@@ -111,6 +113,25 @@ object NostrUtils {
             20, 22 -> "Media Note"
             else -> "Kind $kind"
         }
+    }
+
+    fun formatDate(timestamp: Long): String {
+        // Handle seconds vs milliseconds (Nostr uses seconds, Android uses ms)
+        val ms = if (timestamp < 30_000_000_000L) timestamp * 1000L else timestamp
+        val date = Date(ms)
+        val now = Calendar.getInstance()
+        val postDate = Calendar.getInstance().apply { time = date }
+        
+        val postYear = postDate.get(Calendar.YEAR)
+        val currentYear = now.get(Calendar.YEAR)
+        
+        val pattern = if (postYear == currentYear) {
+            "MMM d, HH:mm"
+        } else {
+            "MMM d, yyyy, HH:mm"
+        }
+        
+        return SimpleDateFormat(pattern, Locale.getDefault()).format(date)
     }
     
     fun normalizeUrl(url: String): String {

@@ -209,18 +209,23 @@ class RelayManager(
                         val type = json.optString(0)
                         if (type == "EVENT" && json.optString(1) == subId) {
                             val event = json.getJSONObject(2)
+                            val createdAt = event.optLong("created_at", 0L)
                             try {
                                 val content = JSONObject(event.optString("content"))
                                 val profile = UserProfile(
                                     name = content.optString("name").ifEmpty { content.optString("display_name") },
                                     pictureUrl = content.optString("picture"),
-                                    lud16 = content.optString("lud16")
+                                    lud16 = content.optString("lud16"),
+                                    createdAt = createdAt
                                 )
-                                if (result.compareAndSet(null, profile)) {
-                                    latch.countDown()
+                                
+                                synchronized(result) {
+                                    val current = result.get()
+                                    if (current == null || createdAt > current.createdAt) {
+                                        result.set(profile)
+                                    }
                                 }
                             } catch (_: Exception) {}
-                            webSocket.close(1000, "Done")
                         } else if (type == "EOSE" && json.optString(1) == subId) {
                             webSocket.close(1000, "EOSE")
                         }
@@ -230,7 +235,6 @@ class RelayManager(
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    // Fail silently
                 }
             }
             activeSockets.add(client.newWebSocket(request, listener))
@@ -307,15 +311,18 @@ class RelayManager(
                             if (type == "EVENT" && json.optString(1) == subId) {
                                 val event = json.getJSONObject(2)
                                 val pk = event.optString("pubkey")
+                                val createdAt = event.optLong("created_at", 0L)
                                 try {
                                     val content = JSONObject(event.optString("content"))
                                     val profile = UserProfile(
                                         name = content.optString("name").ifEmpty { content.optString("display_name") },
                                         pictureUrl = content.optString("picture"),
-                                        lud16 = content.optString("lud16")
+                                        lud16 = content.optString("lud16"),
+                                        createdAt = createdAt
                                     )
                                     synchronized(results) { 
-                                        if (!results.containsKey(pk)) {
+                                        val existing = results[pk]
+                                        if (existing == null || createdAt > existing.createdAt) {
                                             results[pk] = profile
                                             onProfileFound?.invoke(pk, profile)
                                         }
