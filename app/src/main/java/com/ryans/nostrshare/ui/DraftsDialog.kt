@@ -1,5 +1,6 @@
 package com.ryans.nostrshare.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
@@ -23,7 +24,9 @@ import android.net.Uri
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.*
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
@@ -150,11 +153,39 @@ fun DraftsHistoryList(
     val remoteHistory by vm.remoteHistory.collectAsState(initial = emptyList<Draft>())
     val isFetchingRemoteHistory = vm.isFetchingRemoteHistory
     var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
+    var showFilters by remember { mutableStateOf(false) }
     
-    val combinedHistory = remember(scheduledHistory, remoteHistory) {
-        (scheduledHistory + remoteHistory).distinctBy { 
-            if (it.publishedEventId.isNullOrBlank()) "local_${it.id}" else it.publishedEventId 
-        }.sortedByDescending { it.actualPublishedAt ?: it.scheduledAt ?: it.lastEdited }
+    val activeFilters = vm.activeHistoryFilters
+    
+    val filterPredicate: (Draft) -> Boolean = { draft ->
+        if (activeFilters.isEmpty()) true
+        else {
+            activeFilters.any { filter ->
+                when (filter) {
+                    ProcessTextViewModel.HistoryFilter.NOTE -> draft.kind == 1 && !draft.isQuote
+                    ProcessTextViewModel.HistoryFilter.HIGHLIGHT -> draft.kind == 9802
+                    ProcessTextViewModel.HistoryFilter.MEDIA -> draft.kind == 20 || draft.kind == 22
+                    ProcessTextViewModel.HistoryFilter.REPOST -> draft.kind == 6 || draft.kind == 16
+                    ProcessTextViewModel.HistoryFilter.QUOTE -> draft.isQuote
+                }
+            }
+        }
+    }
+
+    val filteredDrafts by remember(drafts) {
+        derivedStateOf { drafts.filter(filterPredicate) }
+    }
+    
+    val filteredScheduled by remember(allScheduled) {
+        derivedStateOf { allScheduled.filter(filterPredicate) }
+    }
+
+    val combinedHistory by remember(scheduledHistory, remoteHistory) {
+        derivedStateOf {
+            (scheduledHistory + remoteHistory).distinctBy { 
+                it.publishedEventId ?: "local_${it.id}" 
+            }.filter(filterPredicate).sortedByDescending { it.actualPublishedAt ?: it.scheduledAt ?: it.lastEdited }
+        }
     }
     
     LaunchedEffect(selectedTab) {
@@ -164,25 +195,140 @@ fun DraftsHistoryList(
     }
 
     Box(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        when (selectedTab) {
-            0 -> DraftList(drafts, onSelect = onEditDraft, onDelete = {
-                vm.deleteDraft(it.id)
-            }, vm = vm, onMediaClick = { showMediaDetail = it })
-            1 -> ScheduledList(allScheduled, vm = vm, onCancel = {
-                vm.cancelScheduledNote(it)
-            }, onEditAndReschedule = onEditAndReschedule, onSaveToDrafts = onSaveToDrafts, onMediaClick = { showMediaDetail = it })
-            2 -> HistoryList(
-                history = combinedHistory,
-                vm = vm,
-                isFetching = isFetchingRemoteHistory,
-                onClearHistory = { vm.clearScheduledHistory() },
-                onOpenInClient = onOpenInClient,
-                onMediaClick = { showMediaDetail = it },
-                onRepost = onRepost,
-                onLoadMore = { vm.loadMoreRemoteHistory() }
-            )
+        Column(Modifier.fillMaxSize()) {
+            when (selectedTab) {
+                0 -> DraftList(
+                    drafts = filteredDrafts, 
+                    isFiltered = activeFilters.isNotEmpty(),
+                    onSelect = onEditDraft, 
+                    onDelete = { vm.deleteDraft(it.id) }, 
+                    vm = vm, 
+                    onMediaClick = { showMediaDetail = it }
+                )
+                1 -> ScheduledList(
+                    pending = filteredScheduled, 
+                    isFiltered = activeFilters.isNotEmpty(),
+                    vm = vm, 
+                    onCancel = { vm.cancelScheduledNote(it) }, 
+                    onEditAndReschedule = onEditAndReschedule, 
+                    onSaveToDrafts = onSaveToDrafts, 
+                    onMediaClick = { showMediaDetail = it }
+                )
+                2 -> HistoryList(
+                    history = combinedHistory,
+                    vm = vm,
+                    isFetching = isFetchingRemoteHistory,
+                    onClearHistory = { vm.clearScheduledHistory() },
+                    onOpenInClient = onOpenInClient,
+                    onMediaClick = { showMediaDetail = it },
+                    onRepost = onRepost,
+                    onLoadMore = { vm.loadMoreRemoteHistory() }
+                )
+            }
         }
         
+        // Filter FAB and Dropdown (Now universal)
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(bottom = 16.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showFilters,
+                enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .padding(bottom = 12.dp)
+                        .width(220.dp),
+                    shape = MaterialTheme.shapes.medium,
+                    tonalElevation = 8.dp,
+                    shadowElevation = 6.dp,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("Filters", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.height(8.dp))
+                        
+                        // Full History Toggle - Only in History Tab
+                        if (selectedTab == 2) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Full History", style = MaterialTheme.typography.bodyMedium)
+                                Switch(
+                                    checked = vm.isFullHistoryEnabled,
+                                    onCheckedChange = { vm.toggleFullHistory() },
+                                    modifier = Modifier.scale(0.8f)
+                                )
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                        
+                        // Kind Filters
+                        val filterPairs = listOf(
+                            "Note" to ProcessTextViewModel.HistoryFilter.NOTE,
+                            "Highlight" to ProcessTextViewModel.HistoryFilter.HIGHLIGHT,
+                            "Media" to ProcessTextViewModel.HistoryFilter.MEDIA,
+                            "Repost" to ProcessTextViewModel.HistoryFilter.REPOST,
+                            "Quote" to ProcessTextViewModel.HistoryFilter.QUOTE
+                        )
+                        
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            filterPairs.forEach { (label, filter) ->
+                                val selected = activeFilters.contains(filter)
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { vm.toggleHistoryFilter(filter) },
+                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                                    leadingIcon = if (selected) {
+                                        { Icon(Icons.Default.Check, null, Modifier.size(12.dp)) }
+                                    } else null,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                )
+                            }
+                        }
+
+                        if (activeFilters.isNotEmpty()) {
+                            TextButton(
+                                onClick = { vm.activeHistoryFilters.clear() },
+                                modifier = Modifier.fillMaxWidth(),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text("Clear All", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                }
+            }
+
+            FloatingActionButton(
+                onClick = { showFilters = !showFilters },
+                containerColor = if (activeFilters.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    imageVector = if (showFilters) Icons.Default.Close else Icons.Default.FilterList,
+                    contentDescription = "Filters",
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+
         showMediaDetail?.let { item ->
             MediaDetailDialog(
                 item = item,
@@ -194,23 +340,35 @@ fun DraftsHistoryList(
 }
 
 @Composable
-fun DraftList(drafts: List<Draft>, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit, vm: ProcessTextViewModel, onMediaClick: (MediaUploadState) -> Unit) {
+fun DraftList(
+    drafts: List<Draft>, 
+    isFiltered: Boolean,
+    onSelect: (Draft) -> Unit, 
+    onDelete: (Draft) -> Unit, 
+    vm: ProcessTextViewModel, 
+    onMediaClick: (MediaUploadState) -> Unit
+) {
     if (drafts.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No saved drafts", style = MaterialTheme.typography.bodyMedium)
+        Box(
+            Modifier.fillMaxSize().padding(bottom = 64.dp), 
+            contentAlignment = Alignment.Center
+        ) {
+            val message = if (isFiltered) "No drafts match your filters" else "No saved drafts"
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
             items(drafts, key = { it.id }) { draft ->
                 DraftItem(draft, onSelect, onDelete, vm, onMediaClick)
             }
+            item { Spacer(Modifier.height(80.dp)) } // Bottom padding for FAB
         }
     }
 }
 
 @Composable
 fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit, vm: ProcessTextViewModel, onMediaClick: (MediaUploadState) -> Unit) {
-    val date = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(draft.lastEdited))
+    val date = NostrUtils.formatDate(draft.lastEdited)
     
     Card(
         modifier = Modifier
@@ -394,6 +552,7 @@ fun DraftItem(draft: Draft, onSelect: (Draft) -> Unit, onDelete: (Draft) -> Unit
 @Composable
 fun ScheduledList(
     pending: List<Draft>,
+    isFiltered: Boolean,
     vm: ProcessTextViewModel,
     onCancel: (Draft) -> Unit,
     onEditAndReschedule: (Draft) -> Unit,
@@ -401,8 +560,12 @@ fun ScheduledList(
     onMediaClick: (MediaUploadState) -> Unit
 ) {
     if (pending.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No pending scheduled notes", style = MaterialTheme.typography.bodyMedium)
+        Box(
+            Modifier.fillMaxSize().padding(bottom = 64.dp), 
+            contentAlignment = Alignment.Center
+        ) {
+            val message = if (isFiltered) "No scheduled notes match your filters" else "No pending scheduled notes"
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
@@ -427,6 +590,7 @@ fun ScheduledList(
                     }
                 )
             }
+            item { Spacer(Modifier.height(80.dp)) } // Bottom padding for FAB
         }
     }
 }
@@ -442,37 +606,47 @@ fun HistoryList(
     onRepost: (Draft) -> Unit,
     onLoadMore: () -> Unit
 ) {
-    if (history.isEmpty() && !isFetching) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No history yet", style = MaterialTheme.typography.bodyMedium)
-        }
-    } else if (history.isEmpty() && isFetching) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-    } else {
-        Column(Modifier.fillMaxSize()) {
-            if (isFetching && history.isEmpty()) {
-                Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+    val listState = rememberLazyListState()
+
+    // Trigger load more when reaching the end
+    LaunchedEffect(listState, history.size, isFetching) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+            .collect { lastIndex ->
+                if (lastIndex != null && lastIndex >= history.size - 5 && !isFetching && !vm.hasReachedEndOfRemoteHistory) {
+                    onLoadMore()
                 }
-            } else if (isFetching) {
-                // Inline loading indicator at the top if we already have items (background refresh)
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
             }
-            val listState = rememberLazyListState()
-            
-            // Trigger load more when reaching the end
-            LaunchedEffect(listState, history.size, isFetching) {
-                snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
-                    .collect { lastIndex ->
-                        if (lastIndex != null && lastIndex >= history.size - 5 && !isFetching && !vm.hasReachedEndOfRemoteHistory) {
-                            onLoadMore()
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        if (isFetching && history.isEmpty()) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
+        } else if (isFetching) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
+        }
+        
+        Box(Modifier.fillMaxSize()) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                if (history.isEmpty() && !isFetching) {
+                    item {
+                        Box(
+                            Modifier
+                                .fillParentMaxSize()
+                                .padding(bottom = 64.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val emptyMessage = if (vm.activeHistoryFilters.isNotEmpty()) {
+                                "No items match your filters"
+                            } else if (!vm.isFullHistoryEnabled) {
+                                "Enable Full History to fetch remote notes"
+                            } else {
+                                "No history found"
+                            }
+                            Text(emptyMessage, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-            }
-            
-            LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
+                }
+
                 items(history, key = { it.id }) { note ->
                     UnifiedPostItem(
                         note = note,
@@ -494,7 +668,7 @@ fun HistoryList(
                         }
                     )
                 }
-                
+
                 if (isFetching && history.isNotEmpty()) {
                     item {
                         Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
@@ -508,6 +682,8 @@ fun HistoryList(
                         }
                     }
                 }
+                
+                item { Spacer(Modifier.height(80.dp)) } // Bottom padding for FAB
             }
         }
     }
@@ -515,7 +691,7 @@ fun HistoryList(
 
 @Composable
 fun UnifiedPostItem(note: Draft, vm: ProcessTextViewModel, onMediaClick: (MediaUploadState) -> Unit, actions: @Composable () -> Unit) {
-    val date = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(note.scheduledAt ?: note.lastEdited))
+    val date = NostrUtils.formatDate(note.scheduledAt ?: note.lastEdited)
     val isCompleted = note.isCompleted
     val isSuccess = isCompleted && note.publishError == null
     

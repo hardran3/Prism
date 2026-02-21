@@ -1145,9 +1145,37 @@ class ProcessTextActivity : ComponentActivity() {
                         },
                         onRepost = { draft ->
                             vm.showDraftsHistory = false
+                            
+                            // Reset composer state to ensure a clean Repost (Kind 6)
+                            vm.quoteContent = ""
+                            vm.sourceUrl = draft.sourceUrl // Use stored bech32 if available
+                            vm.mediaItems.clear()
+                            
                             // Repost Logic
                             vm.setKind(com.ryans.nostrshare.ProcessTextViewModel.PostKind.REPOST)
                             vm.originalEventJson = draft.originalEventJson
+                            
+                            // Copy metadata for correct Kind 6 construction
+                            vm.highlightEventId = draft.highlightEventId
+                            vm.highlightAuthor = draft.highlightAuthor
+                            vm.highlightKind = draft.highlightKind
+                            vm.highlightIdentifier = draft.highlightIdentifier
+                            
+                            // Restore relays
+                            try {
+                                draft.highlightRelaysJson?.let { jsonString ->
+                                    if (jsonString.isNotEmpty()) {
+                                        val jsonArray = org.json.JSONArray(jsonString)
+                                        vm.highlightRelays.clear()
+                                        for (i in 0 until jsonArray.length()) {
+                                            vm.highlightRelays.add(jsonArray.getString(i))
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("ProcessTextActivity", "Error parsing highlightRelaysJson: ${e.message}")
+                            }
+
                             // Trigger date picker
                             showDatePicker = true
                         }

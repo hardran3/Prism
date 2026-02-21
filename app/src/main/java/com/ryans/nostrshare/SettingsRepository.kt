@@ -41,6 +41,20 @@ class SettingsRepository(appContext: Context) {
     fun isSchedulingEnabled(): Boolean = prefs.getBoolean("scheduling_enabled", false)
     fun setSchedulingEnabled(enabled: Boolean) = prefs.edit().putBoolean("scheduling_enabled", enabled).apply()
 
+    fun isFullHistoryEnabled(pubkey: String? = null): Boolean {
+        val key = if (pubkey != null) "${pubkey}_full_history_enabled" else "full_history_enabled"
+        return if (pubkey != null && !prefs.contains(key)) {
+            prefs.getBoolean("full_history_enabled", false) // Fallback
+        } else {
+            prefs.getBoolean(key, false)
+        }
+    }
+
+    fun setFullHistoryEnabled(enabled: Boolean, pubkey: String? = null) {
+        val key = if (pubkey != null) "${pubkey}_full_history_enabled" else "full_history_enabled"
+        prefs.edit().putBoolean(key, enabled).apply()
+    }
+
     fun isAlwaysUseKind1(pubkey: String? = null): Boolean {
         val key = if (pubkey != null) "${pubkey}_always_kind_1" else "always_kind_1"
         return if (pubkey != null && !prefs.contains(key)) {
@@ -161,7 +175,8 @@ class SettingsRepository(appContext: Context) {
                 result[key] = UserProfile(
                     name = if (profileJson.isNull("name")) null else profileJson.optString("name"),
                     pictureUrl = if (profileJson.isNull("picture")) null else profileJson.optString("picture"),
-                    lud16 = if (profileJson.isNull("lud16")) null else profileJson.optString("lud16")
+                    lud16 = if (profileJson.isNull("lud16")) null else profileJson.optString("lud16"),
+                    createdAt = profileJson.optLong("createdAt", 0L)
                 )
             }
         } catch (_: Exception) {}
@@ -175,6 +190,7 @@ class SettingsRepository(appContext: Context) {
             profileJson.put("name", profile.name)
             profileJson.put("picture", profile.pictureUrl)
             profileJson.put("lud16", profile.lud16)
+            profileJson.put("createdAt", profile.createdAt)
             obj.put(pk, profileJson)
         }
         prefs.edit().putString("username_cache_json_v2", obj.toString()).apply()
@@ -192,7 +208,8 @@ class SettingsRepository(appContext: Context) {
                     npub = obj.optString("npub").takeIf { it.isNotEmpty() },
                     signerPackage = obj.optString("signerPackage").takeIf { it.isNotEmpty() },
                     name = obj.optString("name").takeIf { it.isNotEmpty() },
-                    pictureUrl = obj.optString("pictureUrl").takeIf { it.isNotEmpty() }
+                    pictureUrl = obj.optString("pictureUrl").takeIf { it.isNotEmpty() },
+                    createdAt = obj.optLong("createdAt", 0L)
                 ))
             }
         } catch (_: Exception) {}
@@ -208,6 +225,7 @@ class SettingsRepository(appContext: Context) {
             obj.put("signerPackage", account.signerPackage)
             obj.put("name", account.name)
             obj.put("pictureUrl", account.pictureUrl)
+            obj.put("createdAt", account.createdAt)
             array.put(obj)
         }
         prefs.edit().putString("known_accounts_json", array.toString()).apply()

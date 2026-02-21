@@ -37,5 +37,6 @@ data class Draft(
     val isRemoteCache: Boolean = false
 ) {
     @Ignore var isRemote: Boolean = false
-    val isQuote: Boolean get() = kind == 1 && com.ryans.nostrshare.NostrUtils.hasQuoteLink(content)
+    val isQuote: Boolean get() = kind == 1 && 
+        (com.ryans.nostrshare.NostrUtils.hasQuoteLink(content) || com.ryans.nostrshare.NostrUtils.hasQuoteLink(sourceUrl))
 }

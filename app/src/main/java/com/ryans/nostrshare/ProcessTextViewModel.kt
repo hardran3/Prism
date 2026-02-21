@@ -38,6 +38,17 @@ enum class OnboardingStep {
 }
 
 class ProcessTextViewModel : ViewModel() {
+    enum class HistoryFilter { NOTE, HIGHLIGHT, MEDIA, REPOST, QUOTE }
+    var activeHistoryFilters = mutableStateListOf<HistoryFilter>()
+    
+    fun toggleHistoryFilter(filter: HistoryFilter) {
+        if (activeHistoryFilters.contains(filter)) {
+            activeHistoryFilters.remove(filter)
+        } else {
+            activeHistoryFilters.add(filter)
+        }
+    }
+
     var quoteContent by mutableStateOf("")
     var sourceUrl by mutableStateOf("")
     var mediaTitle by mutableStateOf("") // User-defined title for media
@@ -62,6 +73,7 @@ class ProcessTextViewModel : ViewModel() {
     var isSchedulingEnabled by mutableStateOf(false)
     var currentOnboardingStep by mutableStateOf(OnboardingStep.WELCOME)
     var isSyncingServers by mutableStateOf(false)
+    var isFullHistoryEnabled by mutableStateOf(false)
 
     // Cached GUI data (Web Preview)
     var previewTitle by mutableStateOf<String?>(null)
@@ -131,6 +143,7 @@ class ProcessTextViewModel : ViewModel() {
     var remoteHistoryCursor by mutableStateOf<Long?>(null)
 
     fun fetchRemoteHistory() {
+        if (!isFullHistoryEnabled) return
         val currentPk = pubkey ?: return
         viewModelScope.launch {
             try {
@@ -183,6 +196,7 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun loadMoreRemoteHistory() {
+        if (!isFullHistoryEnabled) return
         val currentPk = pubkey ?: return
         if (isFetchingRemoteHistory || hasReachedEndOfRemoteHistory) return
         
@@ -262,16 +276,27 @@ class ProcessTextViewModel : ViewModel() {
         var repostOriginalEventJson: String? = null
         var previewTitle: String? = null
         
+        var highlightEventId: String? = null
+        var highlightAuthor: String? = null
+        var highlightKind: Int? = null
+        
         // Extract data from tags
         val tags = mutableListOf<List<String>>()
         for (i in 0 until tagsArray.length()) {
             val tag = tagsArray.optJSONArray(i)
-            if (tag != null) {
+            if (tag != null && tag.length() >= 2) {
                 val tagList = mutableListOf<String>()
                 for (j in 0 until tag.length()) {
                     tagList.add(tag.optString(j))
                 }
                 tags.add(tagList)
+                
+                // Extract metadata for reposting support
+                when (tagList[0]) {
+                    "e" -> if (highlightEventId == null) highlightEventId = tagList[1]
+                    "p" -> if (highlightAuthor == null) highlightAuthor = tagList[1]
+                    "k" -> if (highlightKind == null) highlightKind = tagList[1].toIntOrNull()
+                }
             }
         }
 
@@ -322,14 +347,29 @@ class ProcessTextViewModel : ViewModel() {
                 if (sourceUrl.isBlank()) {
                     sourceUrl = tags.find { it.size >= 2 && (it[0] == "r" || it[0] == "u" || (it[0].length == 1 && it[1].startsWith("http"))) }?.get(1) ?: ""
                 }
+                
+                // For Kind 1, the event itself is the highlight source
+                highlightEventId = eventId
+                highlightAuthor = json.optString("pubkey")
+                highlightKind = 1
             }
             6, 16 -> {
                 // Reposts: extract the inner event and always resolve the e-tag
                 val eTag = tags.find { it.size >= 2 && it[0] == "e" }
                 
                 // If content is the inner event JSON, save it for originalEventJson
-                if (content.startsWith("{")) {
+                if (content.startsWith("{") && content.contains("\"id\"")) {
                     repostOriginalEventJson = content
+                    
+                    // Also try to extract metadata from this inner content if we missed it from tags
+                    if (highlightEventId == null || highlightAuthor == null) {
+                        try {
+                            val innerJson = JSONObject(content)
+                            if (highlightEventId == null) highlightEventId = innerJson.optString("id").takeIf { it.isNotBlank() }
+                            if (highlightAuthor == null) highlightAuthor = innerJson.optString("pubkey").takeIf { it.isNotBlank() }
+                            if (highlightKind == null) highlightKind = innerJson.optInt("kind", 1)
+                        } catch (_: Exception) {}
+                    }
                 }
                 
                 // Always set sourceUrl from e-tag for UI resolution
@@ -404,6 +444,10 @@ class ProcessTextViewModel : ViewModel() {
             kind = kindEnum?.kind ?: kind,
             mediaJson = mediaJson,
             mediaTitle = "",
+            highlightEventId = highlightEventId,
+            highlightAuthor = highlightAuthor,
+            highlightKind = highlightKind,
+            highlightRelaysJson = if (highlightEventId != null) org.json.JSONArray(tags.filter { it[0] == "e" && it.size >= 3 }.map { it[2] }.distinct()).toString() else null,
             originalEventJson = repostOriginalEventJson ?: json.toString(),
             lastEdited = createdAt,
             pubkey = currentPk,
@@ -451,9 +495,10 @@ class ProcessTextViewModel : ViewModel() {
         val onboardedFromRepo = settingsRepository.isOnboarded()
         isOnboarded = onboardedFromRepo
         isSchedulingEnabled = settingsRepository.isSchedulingEnabled()
+        val savedPubkey = prefs.getString("pubkey", null)
+        isFullHistoryEnabled = settingsRepository.isFullHistoryEnabled(savedPubkey)
 
         // Load persisted session
-        val savedPubkey = prefs.getString("pubkey", null)
         if (savedPubkey != null) {
             pubkey = savedPubkey
             npub = prefs.getString("npub", null)
@@ -461,8 +506,9 @@ class ProcessTextViewModel : ViewModel() {
             
             val savedName = prefs.getString("user_name", null)
             val savedPic = prefs.getString("user_pic", null)
+            val savedTime = prefs.getLong("user_created_at", 0L)
             if (savedName != null || savedPic != null) {
-                userProfile = UserProfile(savedName, savedPic)
+                userProfile = UserProfile(savedName, savedPic, createdAt = savedTime)
             }
             
             // Refresh profile in background only if already fully onboarded
@@ -485,6 +531,20 @@ class ProcessTextViewModel : ViewModel() {
         followedPubkeys = settingsRepository.getFollowedPubkeys()
         settingsRepository.getUsernameCache().forEach { (pk, profile) ->
             usernameCache[pk] = profile
+        }
+    }
+
+    fun toggleFullHistory() {
+        val newState = !isFullHistoryEnabled
+        isFullHistoryEnabled = newState
+        settingsRepository.setFullHistoryEnabled(newState, pubkey)
+        if (!newState) {
+            viewModelScope.launch {
+                pubkey?.let { draftDao.deleteRemoteHistory(it) }
+                hasReachedEndOfRemoteHistory = false
+            }
+        } else {
+            fetchRemoteHistory()
         }
     }
 
@@ -531,10 +591,21 @@ class ProcessTextViewModel : ViewModel() {
         pubkey = hexKey
         npub = account?.npub
         signerPackageName = account?.signerPackage
-        userProfile = account?.let { UserProfile(it.name, it.pictureUrl) } ?: usernameCache[hexKey]
+        userProfile = account?.let { UserProfile(it.name, it.pictureUrl, createdAt = it.createdAt) } ?: usernameCache[hexKey]
+        
+        // Update persistent session for switches
+        prefs.edit()
+            .putString("pubkey", hexKey)
+            .putString("npub", account?.npub)
+            .putString("signer_package", account?.signerPackage)
+            .putString("user_name", userProfile?.name)
+            .putString("user_pic", userProfile?.pictureUrl)
+            .putLong("user_created_at", userProfile?.createdAt ?: 0L)
+            .apply()
         
         // Reload scoped settings for this user
         blossomServers = settingsRepository.getBlossomServers(hexKey)
+        isFullHistoryEnabled = settingsRepository.isFullHistoryEnabled(hexKey)
         
         // Persist as active user
         prefs.edit()
@@ -553,18 +624,26 @@ class ProcessTextViewModel : ViewModel() {
             try {
                 val profile = relayManager.fetchUserProfile(pk)
                 if (profile != null) {
-                    userProfile = profile
-                    prefs.edit()
-                        .putString("user_name", profile.name)
-                        .putString("user_pic", profile.pictureUrl)
-                        .apply()
+                    val currentTs = userProfile?.createdAt ?: 0L
+                    if (profile.createdAt > currentTs) {
+                        userProfile = profile
+                        prefs.edit()
+                            .putString("user_name", profile.name)
+                            .putString("user_pic", profile.pictureUrl)
+                            .putLong("user_created_at", profile.createdAt)
+                            .apply()
                         
-                    // Update Known Accounts list
-                    val index = knownAccounts.indexOfFirst { it.pubkey == pk }
-                    if (index >= 0) {
-                        val updated = knownAccounts[index].copy(name = profile.name, pictureUrl = profile.pictureUrl)
-                        knownAccounts[index] = updated
-                        settingsRepository.setKnownAccounts(knownAccounts.toList())
+                        // Update Known Accounts list
+                        val index = knownAccounts.indexOfFirst { it.pubkey == pk }
+                        if (index >= 0) {
+                            val updated = knownAccounts[index].copy(
+                                name = profile.name, 
+                                pictureUrl = profile.pictureUrl,
+                                createdAt = profile.createdAt
+                            )
+                            knownAccounts[index] = updated
+                            settingsRepository.setKnownAccounts(knownAccounts.toList())
+                        }
                     }
                 }
                 
@@ -871,7 +950,7 @@ class ProcessTextViewModel : ViewModel() {
             val draft = Draft(
                 content = quoteContent,
                 sourceUrl = sourceUrl,
-                kind = postKind.kind,
+                kind = if (postKind == PostKind.REPOST && quoteContent.isNotBlank()) 1 else postKind.kind,
                 mediaJson = mediaJson,
                 mediaTitle = mediaTitle,
                 highlightEventId = highlightEventId,
@@ -1521,7 +1600,7 @@ class ProcessTextViewModel : ViewModel() {
             val draft = Draft(
                 content = quoteContent,
                 sourceUrl = sourceUrl,
-                kind = postKind.kind,
+                kind = if (postKind == PostKind.REPOST && quoteContent.isNotBlank()) 1 else postKind.kind,
                 mediaJson = mediaJson,
                 mediaTitle = mediaTitle,
                 highlightEventId = highlightEventId,
@@ -1559,7 +1638,7 @@ class ProcessTextViewModel : ViewModel() {
                 id = currentDraftId ?: 0,
                 content = quoteContent,
                 sourceUrl = sourceUrl,
-                kind = postKind.kind,
+                kind = if (postKind == PostKind.REPOST && quoteContent.isNotBlank()) 1 else postKind.kind,
                 mediaJson = mediaJson,
                 mediaTitle = mediaTitle,
                 highlightEventId = highlightEventId,
@@ -1644,6 +1723,16 @@ class ProcessTextViewModel : ViewModel() {
         highlightKind = draft.highlightKind
         highlightIdentifier = draft.highlightIdentifier
         originalEventJson = draft.originalEventJson
+        
+        // Robust Fallback: extract metadata from originalEventJson if missing
+        if (highlightEventId == null && !originalEventJson.isNullOrBlank()) {
+            try {
+                val originalEvent = JSONObject(originalEventJson!!)
+                highlightEventId = originalEvent.optString("id").takeIf { it.isNotBlank() }
+                highlightAuthor = originalEvent.optString("pubkey").takeIf { it.isNotBlank() }
+                highlightKind = originalEvent.optInt("kind", 1)
+            } catch (_: Exception) {}
+        }
         
         // Restore cached GUI info
         savedContentBuffer = draft.savedContentBuffer ?: ""
@@ -1831,18 +1920,47 @@ class ProcessTextViewModel : ViewModel() {
              PostKind.REPOST -> {
                  if (quoteContent.isBlank()) {
                      // NIP-18 Repost
-                     val kind = if (highlightKind == 1) 6 else 16
+                     
+                     // Robust Fallback: extract metadata from originalEventJson if missing
+                     if (highlightEventId == null && !originalEventJson.isNullOrBlank()) {
+                         try {
+                             val originalEvent = JSONObject(originalEventJson!!)
+                             highlightEventId = originalEvent.optString("id").takeIf { it.isNotBlank() }
+                             highlightAuthor = originalEvent.optString("pubkey").takeIf { it.isNotBlank() }
+                             highlightKind = originalEvent.optInt("kind", 1)
+                         } catch (_: Exception) {}
+                     }
+
+                     val kind = if (highlightKind == 1 || highlightKind == null) 6 else 16
                      event.put("kind", kind)
                      event.put("content", originalEventJson ?: "")
                      
                      // Tags e and p
                      if (highlightEventId != null) {
                          tags.put(org.json.JSONArray().put("e").put(highlightEventId).put(highlightRelays.firstOrNull() ?: ""))
+                     } else {
+                         // Try searching for 'e' tag in originalEventJson as ultimate fallback
+                         originalEventJson?.let { 
+                             try {
+                                 val tagsArr = JSONObject(it).optJSONArray("tags")
+                                 if (tagsArr != null) {
+                                     for (i in 0 until tagsArr.length()) {
+                                         val t = tagsArr.optJSONArray(i)
+                                         if (t != null && t.length() >= 2 && t.getString(0) == "e") {
+                                              tags.put(t) // Copy original e-tag if we are reposting a repost
+                                              break
+                                         }
+                                     }
+                                 }
+                             } catch (_: Exception) {}
+                         }
                      }
+
                      if (highlightAuthor != null) {
                          tags.put(org.json.JSONArray().put("p").put(highlightAuthor))
                      }
-                     if (highlightKind != null) {
+                     
+                     if (highlightKind != null && highlightKind != 1) {
                          tags.put(org.json.JSONArray().put("k").put(highlightKind.toString()))
                      }
                  } else {
@@ -1961,7 +2079,6 @@ class ProcessTextViewModel : ViewModel() {
              }
         }
         return event.toString()
-
     }
 
     fun prepareBulkFileMetadataEvents(): List<String> {
@@ -2212,8 +2329,11 @@ class ProcessTextViewModel : ViewModel() {
                 var cacheUpdated = false
                 relayResults.forEach { (pk, profile) ->
                     if (profile.name?.isNotEmpty() == true) {
-                        usernameCache[pk] = profile
-                        cacheUpdated = true
+                        val current = usernameCache[pk]
+                        if (current == null || profile.createdAt > current.createdAt) {
+                            usernameCache[pk] = profile
+                            cacheUpdated = true
+                        }
                     }
                 }
                 if (cacheUpdated) {
