@@ -28,6 +28,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import com.ryans.nostrshare.data.Draft
 import com.ryans.nostrshare.utils.HistorySyncManager
+import com.ryans.nostrshare.utils.UnicodeStylizer
 
 enum class OnboardingStep {
     WELCOME,
@@ -35,16 +36,15 @@ enum class OnboardingStep {
     SERVER_SELECTION,
     SCHEDULING_CONFIG
 }
-
 class ProcessTextViewModel : ViewModel() {
-    enum class HistoryFilter { 
+    enum class HistoryFilter {
         NOTE, HIGHLIGHT, MEDIA, REPOST, QUOTE, ARTICLE,
         HAS_MEDIA, IMAGE, GIF, VIDEO
     }
     var activeHistoryFilters = mutableStateListOf<HistoryFilter>()
     var activeHashtags = mutableStateListOf<String>()
     var isHashtagManageMode by mutableStateOf(false)
-    
+
     fun toggleHistoryFilter(filter: HistoryFilter) {
         if (activeHistoryFilters.contains(filter)) {
             activeHistoryFilters.remove(filter)
@@ -63,21 +63,21 @@ class ProcessTextViewModel : ViewModel() {
 
     // Advanced selection-aware content state
     var contentValue by mutableStateOf(TextFieldValue(""))
-    
+
     // Legacy bridge for existing logic
-    var quoteContent: String 
+    var quoteContent: String
         get() = contentValue.text
         set(value) { contentValue = contentValue.copy(text = value) }
 
     var sourceUrl by mutableStateOf("")
-    var mediaTitle by mutableStateOf("") 
+    var mediaTitle by mutableStateOf("")
     var isPublishing by mutableStateOf(false)
     var publishStatus by mutableStateOf("")
     var pubkey by mutableStateOf<String?>(null)
-    var npub by mutableStateOf<String?>(null) 
+    var npub by mutableStateOf<String?>(null)
     var signerPackageName by mutableStateOf<String?>(null)
     var userProfile by mutableStateOf<UserProfile?>(null)
-    
+
     // Long-form state
     var articleTitle by mutableStateOf("")
     var articleSummary by mutableStateOf("")
@@ -91,24 +91,24 @@ class ProcessTextViewModel : ViewModel() {
     var highlightRelays = mutableStateListOf<String>()
     var originalEventJson by mutableStateOf<String?>(null)
     private var savedContentBuffer by mutableStateOf("")
-    
+
     // Onboarding State
     var isOnboarded by mutableStateOf(false)
     var isSchedulingEnabled by mutableStateOf(false)
     var currentOnboardingStep by mutableStateOf(OnboardingStep.WELCOME)
     var isSyncingServers by mutableStateOf(false)
     var isFullHistoryEnabled by mutableStateOf(false)
-    
+
     // Search state
     var searchQuery by mutableStateOf("")
-    
+
     // Delegated Sync State
     val isFetchingRemoteHistory: Boolean
         get() = HistorySyncManager.isSyncing.value
-        
+
     val currentSyncRelay: String?
         get() = HistorySyncManager.currentRelay.value
-        
+
     val syncDiscoveryCount: Int
         get() = HistorySyncManager.discoveryCount.value
 
@@ -120,7 +120,7 @@ class ProcessTextViewModel : ViewModel() {
 
     // Configured Blossom servers for the current session
     var blossomServers by mutableStateOf<List<BlossomServer>>(emptyList())
-    
+
     fun toggleBlossomServer(url: String) {
         blossomServers = blossomServers.map {
             if (it.url == url) it.copy(enabled = !it.enabled) else it
@@ -132,25 +132,47 @@ class ProcessTextViewModel : ViewModel() {
 
     // User Profile Cache (pubkey -> profile)
     var usernameCache = mutableStateMapOf<String, UserProfile>()
-    
+
     // Follow List for prioritization
     var followedPubkeys by mutableStateOf<Set<String>>(emptySet())
 
-    private val prefs by lazy { 
-        NostrShareApp.getInstance().getSharedPreferences("nostr_share_prefs", Context.MODE_PRIVATE) 
+    private val prefs by lazy {
+        NostrShareApp.getInstance().getSharedPreferences("nostr_share_prefs", Context.MODE_PRIVATE)
     }
     val settingsRepository by lazy { SettingsRepository(NostrShareApp.getInstance()) }
     val relayManager by lazy { RelayManager(NostrShareApp.getInstance().client, settingsRepository) }
     private val draftDao by lazy { NostrShareApp.getInstance().database.draftDao() }
 
     // --- Markdown Engine Logic ---
+    fun applyUnicodeStyle(style: UnicodeStylizer.Style) {
+        val selection = contentValue.selection
+        val text = contentValue.text
+
+        if (selection.collapsed) return
+
+        val selStart = selection.min.coerceIn(0, text.length)
+        val selEnd = selection.max.coerceIn(selStart, text.length)
+
+        val selectedText = text.substring(selStart, selEnd)
+        // First, normalize the text back to plain ASCII
+        val normalizedText = UnicodeStylizer.normalize(selectedText)
+        // Then, apply the new style
+        val styledText = UnicodeStylizer.stylize(normalizedText, style)
+
+        val newText = text.replaceRange(selStart, selEnd, styledText)
+
+        contentValue = contentValue.copy(
+            text = newText,
+            selection = TextRange(selStart, selStart + styledText.length)
+        )
+    }
 
     fun applyInlineMarkdown(symbol: String) {
         val selection = contentValue.selection
         val text = contentValue.text
         val selStart = selection.min.coerceIn(0, text.length)
         val selEnd = selection.max.coerceIn(selStart, text.length)
-        
+
         if (selection.collapsed) {
             val newText = text.substring(0, selStart) + symbol + symbol + text.substring(selEnd)
             contentValue = contentValue.copy(
@@ -160,13 +182,13 @@ class ProcessTextViewModel : ViewModel() {
         } else {
             val selectedText = text.substring(selStart, selEnd)
             val isAlreadyWrapped = selectedText.startsWith(symbol) && selectedText.endsWith(symbol)
-            
+
             val newText = if (isAlreadyWrapped) {
                 text.substring(0, selStart) + selectedText.removeSurrounding(symbol) + text.substring(selEnd)
             } else {
                 text.substring(0, selStart) + symbol + selectedText + symbol + text.substring(selEnd)
             }
-            
+
             contentValue = contentValue.copy(
                 text = newText,
                 selection = if (isAlreadyWrapped) {

@@ -56,6 +56,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.material.icons.filled.FormatSize
+import com.ryans.nostrshare.utils.UnicodeStylizer
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -135,10 +137,10 @@ class ProcessTextActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        
-        viewModel.checkDraft() 
-        viewModel.verifyScheduledNotes(this) 
-        
+
+        viewModel.checkDraft()
+        viewModel.verifyScheduledNotes(this)
+
          if (intent.action == Intent.ACTION_PROCESS_TEXT) {
             intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()?.let {
                 viewModel.updateQuote(it)
@@ -208,7 +210,7 @@ class ProcessTextActivity : ComponentActivity() {
             }
         }
     }
-    
+
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun ShareScreen(vm: ProcessTextViewModel, isRepostIntent: Boolean) {
@@ -216,7 +218,7 @@ class ProcessTextActivity : ComponentActivity() {
         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
         var showActionOptions by remember { mutableStateOf(false) }
         var isFullscreenMode by remember { mutableStateOf(false) }
-        
+
         // System Bar Control
         val view = androidx.compose.ui.platform.LocalView.current
         val window = (androidx.compose.ui.platform.LocalContext.current as android.app.Activity).window
@@ -233,8 +235,8 @@ class ProcessTextActivity : ComponentActivity() {
             }
         }
 
-        LaunchedEffect(vm.contentValue, vm.sourceUrl, vm.postKind, vm.mediaItems.size, vm.previewTitle, vm.articleTitle, vm.articleSummary) { 
-            vm.saveDraft() 
+        LaunchedEffect(vm.contentValue, vm.sourceUrl, vm.postKind, vm.mediaItems.size, vm.previewTitle, vm.articleTitle, vm.articleSummary) {
+            vm.saveDraft()
         }
 
         LaunchedEffect(vm.sourceUrl) {
@@ -256,7 +258,7 @@ class ProcessTextActivity : ComponentActivity() {
                  finish()
             }
         }
-        
+
         val eventToSign by vm.eventToSign.collectAsState()
         LaunchedEffect(eventToSign) {
             eventToSign?.let { eventJson ->
@@ -284,7 +286,7 @@ class ProcessTextActivity : ComponentActivity() {
                                 AccountSelectorMenu(expanded = showAccountMenu, onDismiss = { showAccountMenu = false }, vm = vm, onAddAccount = { showAccountMenu = false; getPublicKeyLauncher.launch(GetPublicKeyContract.Input(permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(30023), Permission.signEvent(20), Permission.signEvent(22)))) }, onSwitchAccount = { pk -> showAccountMenu = false; vm.switchUser(pk) })
                             }
                         },
-                        title = { 
+                        title = {
                             var showModeMenu by remember { mutableStateOf(false) }
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { showModeMenu = true }.padding(8.dp)) {
                                 Column {
@@ -378,12 +380,12 @@ class ProcessTextActivity : ComponentActivity() {
             }
         ) { innerPadding ->
             val batchEvents by vm.batchEventsToSign.collectAsState()
-            LaunchedEffect(batchEvents) { 
+            LaunchedEffect(batchEvents) {
                 if (batchEvents.isNotEmpty() && vm.currentSigningPurpose == ProcessTextViewModel.SigningPurpose.BATCH_UPLOAD_AUTH) {
                     signEventsLauncher.launch(SignEventsContract.Input(eventsJson = batchEvents, currentUser = vm.pubkey!!))
                 }
             }
-            
+
             Column(Modifier.padding(innerPadding).consumeWindowInsets(innerPadding).padding(if (isFullscreenMode) 0.dp else 16.dp).fillMaxSize()) {
                 if (isFullscreenMode && vm.postKind == ProcessTextViewModel.PostKind.ARTICLE) {
                     OutlinedTextField(
@@ -420,7 +422,7 @@ class ProcessTextActivity : ComponentActivity() {
                 val h3Style = MaterialTheme.typography.headlineSmall
 
                 OutlinedTextField(
-                    value = vm.contentValue, 
+                    value = vm.contentValue,
                     onValueChange = { newValue ->
                         if (!vm.isVisualMode && newValue.text.length > vm.contentValue.text.length && newValue.text.endsWith("\n")) {
                             val lastLine = vm.contentValue.text.lines().last()
@@ -439,16 +441,16 @@ class ProcessTextActivity : ComponentActivity() {
                                 }
                             } else vm.contentValue = newValue
                         } else vm.contentValue = newValue
-                    }, 
-                    modifier = Modifier.fillMaxWidth().weight(1f).focusRequester(focusRequester), 
+                    },
+                    modifier = Modifier.fillMaxWidth().weight(1f).focusRequester(focusRequester),
                     textStyle = if (isFullscreenMode) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyLarge,
-                    visualTransformation = remember(vm.usernameCache.size, highlightColor, vm.isVisualMode, h1Style, h2Style, h3Style) { 
-                        MarkdownVisualTransformation(vm.usernameCache, highlightColor, codeColor, quoteColor, linkColor, nostrColor, h1Style, h2Style, h3Style, stripDelimiters = vm.isVisualMode) 
+                    visualTransformation = remember(vm.usernameCache.size, highlightColor, vm.isVisualMode, h1Style, h2Style, h3Style) {
+                        MarkdownVisualTransformation(vm.usernameCache, highlightColor, codeColor, quoteColor, linkColor, nostrColor, h1Style, h2Style, h3Style, stripDelimiters = vm.isVisualMode)
                     },
                     shape = if (isFullscreenMode) RoundedCornerShape(0.dp) else OutlinedTextFieldDefaults.shape,
                     colors = if (isFullscreenMode) OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Transparent, unfocusedBorderColor = Color.Transparent) else OutlinedTextFieldDefaults.colors()
                 )
-                
+
                 MarkdownToolbar(vm, isFullscreenMode, onToggleFullscreen = { isFullscreenMode = !isFullscreenMode })
 
                 if (!isFullscreenMode) {
@@ -477,28 +479,58 @@ class ProcessTextActivity : ComponentActivity() {
     @Composable
     fun MarkdownToolbar(vm: ProcessTextViewModel, isFullscreen: Boolean, onToggleFullscreen: () -> Unit) {
         val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-        Surface(modifier = Modifier.fillMaxWidth().padding(horizontal = if (isFullscreen) 8.dp else 0.dp, vertical = 4.dp), tonalElevation = 2.dp, shape = RoundedCornerShape(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.foundation.lazy.LazyRow(modifier = Modifier.weight(1f).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    item { ToolbarButton(Icons.Default.FormatBold) { vm.applyInlineMarkdown("**") } }
-                    item { ToolbarButton(Icons.Default.FormatItalic) { vm.applyInlineMarkdown("_") } }
-                    item { ToolbarButton(Icons.Default.Title) { vm.applyBlockMarkdown("### ") } }
-                    item { ToolbarButton(Icons.Default.FormatQuote) { vm.applyBlockMarkdown("> ") } }
-                    item { ToolbarButton(Icons.Default.Code) { vm.applyCodeMarkdown() } }
-                    item { ToolbarButton(Icons.Default.FormatListBulleted) { vm.applyBlockMarkdown("- ") } }
-                    item { ToolbarButton(Icons.Default.Link) { val clip = clipboardManager.getText()?.text; vm.applyLinkMarkdown(clip) } }
-                    item { VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp)) }
-                    item { 
-                        IconButton(
-                            onClick = { vm.isVisualMode = !vm.isVisualMode },
-                            modifier = Modifier.size(36.dp),
-                            colors = if (vm.isVisualMode) IconButtonDefaults.iconButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer) else IconButtonDefaults.iconButtonColors()
-                        ) { 
-                            Icon(if (vm.isVisualMode) Icons.Default.Visibility else Icons.Default.VisibilityOff, null, modifier = Modifier.size(20.dp)) 
-                        } 
+        var showStyleMenu by remember { mutableStateOf(false) }
+
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = if (isFullscreen) 8.dp else 0.dp, vertical = 4.dp)) {
+            Surface(modifier = Modifier.fillMaxWidth(), tonalElevation = 2.dp, shape = RoundedCornerShape(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LazyRow(modifier = Modifier.weight(1f).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        item { ToolbarButton(Icons.Default.FormatBold) { vm.applyInlineMarkdown("**") } }
+                        item { ToolbarButton(Icons.Default.FormatItalic) { vm.applyInlineMarkdown("_") } }
+                        item { ToolbarButton(Icons.Default.Title) { vm.applyBlockMarkdown("### ") } }
+                        item { ToolbarButton(Icons.Default.FormatQuote) { vm.applyBlockMarkdown("> ") } }
+                        item { ToolbarButton(Icons.Default.Code) { vm.applyCodeMarkdown() } }
+                        item { ToolbarButton(Icons.Default.FormatListBulleted) { vm.applyBlockMarkdown("- ") } }
+                        item {
+                            Box {
+                                ToolbarButton(Icons.Default.FormatSize) { showStyleMenu = true }
+                                DropdownMenu(
+                                    expanded = showStyleMenu,
+                                    onDismissRequest = { showStyleMenu = false },
+                                    properties = PopupProperties(focusable = false)
+                                ) {
+                                    val selection = vm.contentValue.selection
+                                    val selectedText = if (!selection.collapsed) vm.contentValue.text.substring(selection.min, selection.max) else null
+
+                                    UnicodeStylizer.Style.values().forEach { style ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                val previewText = selectedText?.let { UnicodeStylizer.stylize(it, style) } ?: style.preview
+                                                Text(previewText)
+                                            },
+                                            onClick = {
+                                                vm.applyUnicodeStyle(style)
+                                                showStyleMenu = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        item { ToolbarButton(Icons.Default.Link) { val clip = clipboardManager.getText()?.text; vm.applyLinkMarkdown(clip) } }
+                        item { VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp)) }
+                        item {
+                            IconButton(
+                                onClick = { vm.isVisualMode = !vm.isVisualMode },
+                                modifier = Modifier.size(36.dp),
+                                colors = if (vm.isVisualMode) IconButtonDefaults.iconButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer) else IconButtonDefaults.iconButtonColors()
+                            ) {
+                                Icon(if (vm.isVisualMode) Icons.Default.Visibility else Icons.Default.VisibilityOff, null, modifier = Modifier.size(20.dp))
+                            }
+                        }
                     }
+                    IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(36.dp)) { Icon(if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, null, modifier = Modifier.size(20.dp)) }
                 }
-                IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(36.dp)) { Icon(if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, null, modifier = Modifier.size(20.dp)) }
             }
         }
     }
