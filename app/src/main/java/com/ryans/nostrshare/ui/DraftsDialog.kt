@@ -594,7 +594,17 @@ fun IntegratedContent(
                 val groupedItems = group.mapNotNull { url ->
                     mediaItems.find { it.uploadedUrl?.equals(url, ignoreCase = true) == true } ?: run {
                         if (mediaUrlPattern.matches(url)) {
-                            MediaUploadState(id = UUID.randomUUID().toString(), uri = Uri.parse(url)).apply { uploadedUrl = url }
+                            val lc = url.lowercase().substringBefore("?")
+                            val detectedMime = when {
+                                lc.endsWith(".mp4") || lc.endsWith(".mov") || lc.endsWith(".webm") || lc.endsWith(".avi") || lc.endsWith(".mkv") -> "video/mp4"
+                                lc.endsWith(".gif") -> "image/gif"
+                                lc.endsWith(".png") -> "image/png"
+                                lc.endsWith(".webp") -> "image/webp"
+                                lc.endsWith(".svg") -> "image/svg+xml"
+                                lc.endsWith(".jpg") || lc.endsWith(".jpeg") || lc.endsWith(".bmp") -> "image/jpeg"
+                                else -> null
+                            }
+                            MediaUploadState(id = UUID.randomUUID().toString(), uri = Uri.parse(url), mimeType = detectedMime).apply { uploadedUrl = url }
                         } else null
                     }
                 }
@@ -799,7 +809,17 @@ fun NostrEventPreview(event: JSONObject, vm: ProcessTextViewModel, onMediaClick:
                     Spacer(Modifier.height(4.dp))
                     val previewItems = remember(mediaMatches) {
                         mediaMatches.take(3).map { url ->
-                            MediaUploadState(id = UUID.randomUUID().toString(), uri = Uri.parse(url)).apply { uploadedUrl = url }
+                            val lc = url.lowercase().substringBefore("?")
+                            val detectedMime = when {
+                                lc.endsWith(".mp4") || lc.endsWith(".mov") || lc.endsWith(".webm") || lc.endsWith(".avi") || lc.endsWith(".mkv") -> "video/mp4"
+                                lc.endsWith(".gif") -> "image/gif"
+                                lc.endsWith(".png") -> "image/png"
+                                lc.endsWith(".webp") -> "image/webp"
+                                lc.endsWith(".svg") -> "image/svg+xml"
+                                lc.endsWith(".jpg") || lc.endsWith(".jpeg") || lc.endsWith(".bmp") -> "image/jpeg"
+                                else -> null
+                            }
+                            MediaUploadState(id = UUID.randomUUID().toString(), uri = Uri.parse(url), mimeType = detectedMime).apply { uploadedUrl = url }
                         }
                     }
                     ResponsiveMediaGrid(mediaItems = previewItems, onMediaClick = onMediaClick)
@@ -836,8 +856,14 @@ fun ResponsiveMediaGrid(mediaItems: List<MediaUploadState>, onMediaClick: (Media
 @Composable
 fun MediaGridItem(item: MediaUploadState, modifier: Modifier, onMediaClick: (MediaUploadState) -> Unit) {
     val model = remember(item.uploadedUrl, item.uri) { item.uploadedUrl ?: item.uri }
+    val isVideo = remember(item.mimeType, item.uploadedUrl, item.uri) {
+        item.mimeType?.startsWith("video/") == true || run {
+            val url = (item.uploadedUrl ?: item.uri?.toString())?.lowercase()?.substringBefore("?") ?: ""
+            url.endsWith(".mp4") || url.endsWith(".mov") || url.endsWith(".webm") || url.endsWith(".avi") || url.endsWith(".mkv")
+        }
+    }
     Box(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant).clickable { onMediaClick(item) }) {
-        if (item.mimeType?.startsWith("video/") == true) Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.Default.PlayArrow, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (isVideo) Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.Default.PlayArrow, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         else AsyncImage(model = model, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     }
 }

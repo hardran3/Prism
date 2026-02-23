@@ -20,7 +20,9 @@ class RelayManager(
     private val client: OkHttpClient,
     private val settingsRepository: SettingsRepository
 ) {
-    private val eventCache = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+    private val eventCache = java.util.Collections.synchronizedMap(object : LinkedHashMap<String, JSONObject>(200, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, JSONObject>?) = size > 200
+    })
     private val bootstrapRelays = listOf("wss://relay.damus.io", "wss://nos.lol")
     private val indexerRelays = listOf(
         "wss://purplepag.es", 

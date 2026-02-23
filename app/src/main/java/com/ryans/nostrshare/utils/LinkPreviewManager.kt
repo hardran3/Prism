@@ -16,7 +16,9 @@ data class LinkMetadata(
 )
 
 object LinkPreviewManager {
-    private val cache = ConcurrentHashMap<String, LinkMetadata>()
+    private val cache = java.util.Collections.synchronizedMap(object : LinkedHashMap<String, LinkMetadata>(100, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, LinkMetadata>?) = size > 100
+    })
     private val mediaExtensionPattern = ".*\\.(jpg|jpeg|png|gif|webp|bmp|svg|mp4|mov|webm|zip|pdf|exe|dmg|iso|apk)$".toRegex(RegexOption.IGNORE_CASE)
 
     suspend fun fetchMetadata(url: String): LinkMetadata? = withContext(Dispatchers.IO) {

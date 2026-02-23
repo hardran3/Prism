@@ -5,8 +5,8 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
-import coil.decode.VideoFrameDecoder
 import okhttp3.OkHttpClient
+import java.io.File
 
 class NostrShareApp : Application(), ImageLoaderFactory {
     lateinit var client: OkHttpClient
@@ -18,7 +18,9 @@ class NostrShareApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
-        client = OkHttpClient.Builder().build()
+        client = OkHttpClient.Builder()
+            .cache(okhttp3.Cache(File(cacheDir, "http_cache"), 50L * 1024 * 1024))
+            .build()
         database = com.ryans.nostrshare.data.DraftDatabase.getDatabase(this)
         com.ryans.nostrshare.utils.NotificationHelper.createNotificationChannel(this)
     }
@@ -31,12 +33,11 @@ class NostrShareApp : Application(), ImageLoaderFactory {
                 } else {
                     add(GifDecoder.Factory())
                 }
-                add(VideoFrameDecoder.Factory())
             }
             .okHttpClient(client)
             .diskCache {
                 coil.disk.DiskCache.Builder()
-                    .directory(filesDir.resolve("image_cache"))
+                    .directory(cacheDir.resolve("image_cache"))
                     .maxSizeBytes(100L * 1024 * 1024) // 100MB Limit
                     .build()
             }

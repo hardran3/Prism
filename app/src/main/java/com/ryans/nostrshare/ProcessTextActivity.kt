@@ -42,6 +42,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import android.net.Uri
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.withStyle
@@ -50,7 +51,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.VerticalDivider
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 class ProcessTextActivity : ComponentActivity() {
 
@@ -407,37 +414,43 @@ class ProcessTextActivity : ComponentActivity() {
                 val codeColor = MaterialTheme.colorScheme.secondary
                 val quoteColor = MaterialTheme.colorScheme.tertiary
                 
-                OutlinedTextField(
-                    value = vm.contentValue, 
-                    onValueChange = { newValue ->
-                        if (newValue.text.length > vm.contentValue.text.length && newValue.text.endsWith("\n")) {
-                            val lastLine = vm.contentValue.text.lines().last()
-                            val prefix = when {
-                                lastLine.startsWith("- ") -> "- "
-                                lastLine.startsWith("> ") -> "> "
-                                else -> null
-                            }
-                            if (prefix != null) {
-                                if (lastLine.trim() == prefix.trim()) {
-                                    val cleared = newValue.text.substring(0, newValue.text.length - lastLine.length - 1) + "\n"
-                                    vm.contentValue = newValue.copy(text = cleared)
-                                } else {
-                                    val padded = newValue.text + prefix
-                                    vm.contentValue = newValue.copy(text = padded, selection = androidx.compose.ui.text.TextRange(padded.length))
+                if (vm.isVisualMode) {
+                    Box(Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp)) {
+                        VisualEditor(vm = vm)
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = vm.contentValue, 
+                        onValueChange = { newValue ->
+                            if (newValue.text.length > vm.contentValue.text.length && newValue.text.endsWith("\n")) {
+                                val lastLine = vm.contentValue.text.lines().last()
+                                val prefix = when {
+                                    lastLine.startsWith("- ") -> "- "
+                                    lastLine.startsWith("> ") -> "> "
+                                    else -> null
                                 }
+                                if (prefix != null) {
+                                    if (lastLine.trim() == prefix.trim()) {
+                                        val cleared = newValue.text.substring(0, newValue.text.length - lastLine.length - 1) + "\n"
+                                        vm.contentValue = newValue.copy(text = cleared)
+                                    } else {
+                                        val padded = newValue.text + prefix
+                                        vm.contentValue = newValue.copy(text = padded, selection = androidx.compose.ui.text.TextRange(padded.length))
+                                    }
+                                } else vm.contentValue = newValue
                             } else vm.contentValue = newValue
-                        } else vm.contentValue = newValue
-                    }, 
-                    modifier = Modifier.fillMaxWidth().weight(1f).focusRequester(focusRequester), 
-                    textStyle = if (isFullscreenMode) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyLarge,
-                    visualTransformation = remember(vm.usernameCache.size, highlightColor, isFullscreenMode) { 
-                        MarkdownVisualTransformation(vm.usernameCache, highlightColor, codeColor, quoteColor) 
-                    },
-                    shape = if (isFullscreenMode) RoundedCornerShape(0.dp) else OutlinedTextFieldDefaults.shape,
-                    colors = if (isFullscreenMode) OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Transparent, unfocusedBorderColor = Color.Transparent) else OutlinedTextFieldDefaults.colors()
-                )
+                        }, 
+                        modifier = Modifier.fillMaxWidth().weight(1f).focusRequester(focusRequester), 
+                        textStyle = if (isFullscreenMode) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyLarge,
+                        visualTransformation = remember(vm.usernameCache.size, highlightColor, isFullscreenMode) { 
+                            MarkdownVisualTransformation(vm.usernameCache, highlightColor, codeColor, quoteColor) 
+                        },
+                        shape = if (isFullscreenMode) RoundedCornerShape(0.dp) else OutlinedTextFieldDefaults.shape,
+                        colors = if (isFullscreenMode) OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Transparent, unfocusedBorderColor = Color.Transparent) else OutlinedTextFieldDefaults.colors()
+                    )
+                }
                 
-                if (vm.postKind == ProcessTextViewModel.PostKind.ARTICLE) {
+                if (vm.postKind == ProcessTextViewModel.PostKind.ARTICLE || vm.isVisualMode) {
                     MarkdownToolbar(vm, isFullscreenMode, onToggleFullscreen = { isFullscreenMode = !isFullscreenMode })
                 }
 
@@ -477,6 +490,16 @@ class ProcessTextActivity : ComponentActivity() {
                     item { ToolbarButton(Icons.Default.Code) { vm.applyInlineMarkdown("`") } }
                     item { ToolbarButton(Icons.Default.FormatListBulleted) { vm.applyBlockMarkdown("- ") } }
                     item { ToolbarButton(Icons.Default.Link) { val clip = clipboardManager.getText()?.text; vm.applyLinkMarkdown(clip) } }
+                    item { VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp)) }
+                    item { 
+                        IconButton(
+                            onClick = { vm.isVisualMode = !vm.isVisualMode },
+                            modifier = Modifier.size(36.dp),
+                            colors = if (vm.isVisualMode) IconButtonDefaults.iconButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer) else IconButtonDefaults.iconButtonColors()
+                        ) { 
+                            Icon(if (vm.isVisualMode) Icons.Default.Visibility else Icons.Default.VisibilityOff, null, modifier = Modifier.size(20.dp)) 
+                        } 
+                    }
                 }
                 IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(36.dp)) { Icon(if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, null, modifier = Modifier.size(20.dp)) }
             }
@@ -489,25 +512,160 @@ class ProcessTextActivity : ComponentActivity() {
     }
 }
 
-class MarkdownVisualTransformation(private val usernameCache: Map<String, UserProfile>, private val highlightColor: Color, private val codeColor: Color, private val quoteColor: Color) : VisualTransformation {
+@Composable
+fun VisualEditor(vm: ProcessTextViewModel) {
+    val highlightColor = MaterialTheme.colorScheme.primary
+    val codeColor = MaterialTheme.colorScheme.secondary
+    val quoteColor = MaterialTheme.colorScheme.tertiary
+    val linkColor = Color(0xFF2196F3)
+    val nostrColor = Color(0xFF9C27B0)
+
+    val h1Style = MaterialTheme.typography.headlineLarge
+    val h2Style = MaterialTheme.typography.headlineMedium
+    val h3Style = MaterialTheme.typography.headlineSmall
+
+    val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    
+    Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
+        OutlinedTextField(
+            value = vm.contentValue,
+            onValueChange = { vm.contentValue = it },
+            modifier = Modifier.fillMaxWidth().weight(1f).focusRequester(focusRequester),
+            textStyle = MaterialTheme.typography.bodyLarge,
+            visualTransformation = remember(vm.usernameCache.size, highlightColor, h1Style, h2Style, h3Style) {
+                MarkdownVisualTransformation(vm.usernameCache, highlightColor, codeColor, quoteColor, linkColor, nostrColor, h1Style, h2Style, h3Style)
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color.Transparent,
+                unfocusedBorderColor = Color.Transparent
+            )
+        )
+        
+        // Dynamic Quick Previews based on cursor position or links found
+        val text = vm.contentValue.text
+        val selection = vm.contentValue.selection
+        
+        val urlRegex = "(https?://[^\\s]+|nostr:(?:nevent1|note1|naddr1|npub1|nprofile1)[a-z0-9]+)".toRegex(RegexOption.IGNORE_CASE)
+        val matches = urlRegex.findAll(text).toList()
+        
+        if (matches.isNotEmpty()) {
+            Text("Preview available for links below", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 150.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(matches.size) { i ->
+                    val match = matches[i]
+                    val link = match.value
+                    Card(
+                        modifier = Modifier.width(280.dp).fillMaxHeight(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                        onClick = {
+                            // Move cursor to this link
+                            vm.contentValue = vm.contentValue.copy(selection = androidx.compose.ui.text.TextRange(match.range.first, match.range.last + 1))
+                        }
+                    ) {
+                        Box(Modifier.padding(8.dp)) {
+                            if (link.lowercase().startsWith("nostr:")) {
+                                val bech32 = link.substring(6)
+                                com.ryans.nostrshare.ui.NostrLinkPreview(bech32, vm, onMediaClick = {})
+                            } else {
+                                com.ryans.nostrshare.ui.DynamicLinkPreview(link, originalText = link)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun VisualEditorTextPart(initialText: String, transformation: androidx.compose.ui.text.input.VisualTransformation, onTextChanged: (String) -> Unit) {
+    // Deprecated by stable VisualEditor
+}
+
+class MarkdownVisualTransformation(
+    private val usernameCache: Map<String, UserProfile>, 
+    private val highlightColor: Color, 
+    private val codeColor: Color, 
+    private val quoteColor: Color,
+    private val linkColor: Color = Color.Blue,
+    private val nostrColor: Color = Color.Magenta,
+    private val h1Style: androidx.compose.ui.text.TextStyle? = null,
+    private val h2Style: androidx.compose.ui.text.TextStyle? = null,
+    private val h3Style: androidx.compose.ui.text.TextStyle? = null
+) : VisualTransformation {
     override fun filter(text: androidx.compose.ui.text.AnnotatedString): androidx.compose.ui.text.input.TransformedText {
-        val original = text.text; val builder = androidx.compose.ui.text.AnnotatedString.Builder()
-        val lines = original.split('\n'); lines.forEachIndexed { i, line ->
+        val original = text.text
+        val builder = androidx.compose.ui.text.AnnotatedString.Builder()
+        val lines = original.split('\n')
+        
+        lines.forEachIndexed { i, line ->
             when {
-                line.startsWith("#") -> builder.withStyle(androidx.compose.ui.text.SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) { append(line) }
-                line.startsWith(">") -> builder.withStyle(androidx.compose.ui.text.SpanStyle(color = quoteColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) { append(line) }
+                line.startsWith("#") -> {
+                    val level = line.takeWhile { it == '#' }.length
+                    val style = when(level) {
+                        1 -> h1Style
+                        2 -> h2Style
+                        else -> h3Style
+                    }
+                    builder.withStyle(androidx.compose.ui.text.SpanStyle(
+                        fontSize = style?.fontSize ?: androidx.compose.ui.unit.TextUnit.Unspecified,
+                        fontWeight = FontWeight.Bold,
+                        color = highlightColor
+                    )) { builder.append(line) }
+                }
+                line.startsWith(">") -> {
+                    builder.withStyle(androidx.compose.ui.text.SpanStyle(
+                        color = quoteColor, 
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        background = quoteColor.copy(alpha = 0.05f)
+                    )) { builder.append(line) }
+                }
+                line.startsWith("- ") || line.startsWith("* ") || line.contains(Regex("^\\d+\\. ")) -> {
+                    builder.withStyle(androidx.compose.ui.text.SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) {
+                        val prefix = line.takeWhile { it != ' ' } + " "
+                        builder.append(prefix)
+                    }
+                    builder.append(line.substringAfter(" "))
+                }
                 else -> {
-                    var lastIdx = 0; "(\\**|__|_|`|nostr:npub1[a-z0-9]+)".toRegex().findAll(line).forEach { match ->
-                        builder.append(line.substring(lastIdx, match.range.first)); val m = match.value
+                    var lastIdx = 0
+                    val pattern = "(https?://[^\\s]+|nostr:(?:nevent1|note1|naddr1|npub1|nprofile1)[a-z0-9]+|\\*\\*.*?\\*\\*|__.*?__|\\*.*?\\*|_.*?_|`.*?`|#\\w+)".toRegex(RegexOption.IGNORE_CASE)
+                    
+                    pattern.findAll(line).forEach { match ->
+                        builder.append(line.substring(lastIdx, match.range.first))
+                        val m = match.value
                         when {
-                            m.startsWith("**") || m.startsWith("__") -> builder.withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = highlightColor.copy(alpha = 0.7f))) { append(m) }
-                            m.startsWith("_") || m.startsWith("*") -> builder.withStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, color = highlightColor.copy(alpha = 0.7f))) { append(m) }
-                            m.startsWith("`") -> builder.withStyle(androidx.compose.ui.text.SpanStyle(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, background = codeColor.copy(alpha = 0.1f), color = codeColor)) { append(m) }
-                            m.startsWith("nostr:npub1") -> { val pk = try { NostrUtils.findNostrEntity(m.removePrefix("nostr:"))?.id } catch(_: Exception) { null }; val name = pk?.let { usernameCache[it]?.name }; builder.withStyle(androidx.compose.ui.text.SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) { append(if (name != null) "@$name" else m) } }
+                            m.startsWith("http") -> {
+                                builder.withStyle(androidx.compose.ui.text.SpanStyle(color = linkColor, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) { builder.append(m) }
+                            }
+                            m.startsWith("nostr:") -> {
+                                val entity = m.removePrefix("nostr:")
+                                val pk = try { NostrUtils.findNostrEntity(entity)?.id } catch(_: Exception) { null }
+                                val name = pk?.let { usernameCache[it]?.name }
+                                builder.withStyle(androidx.compose.ui.text.SpanStyle(color = nostrColor, fontWeight = FontWeight.Bold)) { 
+                                    builder.append(if (name != null) "@$name" else m) 
+                                }
+                            }
+                            m.startsWith("**") || m.startsWith("__") -> {
+                                builder.withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) { builder.append(m) }
+                            }
+                            m.startsWith("*") || m.startsWith("_") -> {
+                                builder.withStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) { builder.append(m) }
+                            }
+                            m.startsWith("`") -> {
+                                builder.withStyle(androidx.compose.ui.text.SpanStyle(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, background = codeColor.copy(alpha = 0.1f), color = codeColor)) { builder.append(m) }
+                            }
+                            m.startsWith("#") -> {
+                                builder.withStyle(androidx.compose.ui.text.SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) { builder.append(m) }
+                            }
                             else -> builder.append(m)
                         }
                         lastIdx = match.range.last + 1
-                    }; builder.append(line.substring(lastIdx))
+                    }
+                    builder.append(line.substring(lastIdx))
                 }
             }
             if (i < lines.size - 1) builder.append("\n")

@@ -1538,6 +1538,7 @@ class ProcessTextViewModel : ViewModel() {
     var currentDraftId: Int? = null
     var showDatePicker by mutableStateOf(false)
     var showDraftsHistory by mutableStateOf(false)
+    var isVisualMode by mutableStateOf(false)
     var isDraftMonitoringActive by mutableStateOf(false)
 
     fun clearContent() {
