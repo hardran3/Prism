@@ -11,10 +11,10 @@ interface DraftDao {
     @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 0 AND isRemoteCache = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY isOfflineRetry DESC, scheduledAt ASC")
     fun getAllScheduled(pubkey: String?): Flow<List<Draft>>
 
-    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 1 AND isRemoteCache = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY scheduledAt DESC")
+    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 1 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY scheduledAt DESC")
     fun getScheduledHistory(pubkey: String?): Flow<List<Draft>>
     
-    @Query("SELECT * FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey ORDER BY actualPublishedAt DESC")
+    @Query("SELECT * FROM drafts WHERE isRemoteCache = 1 AND isScheduled = 0 AND pubkey = :pubkey ORDER BY actualPublishedAt DESC")
     fun getRemoteHistory(pubkey: String): Flow<List<Draft>>
 
     @Query("SELECT publishedEventId FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey AND publishedEventId IS NOT NULL")

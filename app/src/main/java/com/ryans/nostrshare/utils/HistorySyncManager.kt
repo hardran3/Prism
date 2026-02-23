@@ -73,7 +73,7 @@ object HistorySyncManager {
         if (activeJob?.isActive == true) return
         
         val now = System.currentTimeMillis()
-        if (!force && now - lastDeltaSyncTime < 30000) { // Reduced cooldown to 30s for better feel
+        if (!force && now - lastDeltaSyncTime < 30000) { 
             Log.d(TAG, "Delta sync on cooldown, skipping")
             return
         }
@@ -87,7 +87,7 @@ object HistorySyncManager {
                 
                 val lastTimestamp = withContext(Dispatchers.IO) {
                     draftDao.getMaxRemoteTimestamp(pubkey)
-                } ?: (System.currentTimeMillis() - 86400000) // Default to last 24h if none
+                } ?: (System.currentTimeMillis() - 86400000) 
                 
                 Log.d(TAG, "Starting Parallel Delta Sync for $pubkey since $lastTimestamp")
                 
@@ -102,7 +102,7 @@ object HistorySyncManager {
         }
     }
 
-    fun startPaginationSync(pubkey: String, relayManager: RelayManager, draftDao: DraftDao) {
+    fun startPaginationSync(pubkey: String, relayManager: RelayManager, draftDao: DraftDao, onResult: (Int) -> Unit = {}) {
         if (activeJob?.isActive == true) return
         
         activeJob = scope.launch {
@@ -121,9 +121,11 @@ object HistorySyncManager {
                     val untilTs = oldestTimestamp / 1000 - 1
                     performSync(pubkey, relayManager, draftDao, until = untilTs)
                 }
+                onResult(_discoveryCount.value)
             } catch (e: Exception) {
                 if (e is CancellationException) Log.d(TAG, "Sync Cancelled")
                 else Log.e(TAG, "Sync Failed", e)
+                onResult(-1)
             } finally {
                 cleanup()
             }
@@ -131,24 +133,26 @@ object HistorySyncManager {
     }
 
     private suspend fun performLatestRefresh(
-        pubkey: String,
+        syncPubkey: String,
         relayManager: RelayManager,
         draftDao: DraftDao,
         since: Long
     ) = coroutineScope {
         val kinds = listOf(1, 6, 16, 20, 22, 9802)
         val existingIds = withContext(Dispatchers.IO) {
-            draftDao.getAllRemoteIds(pubkey).toSet()
+            draftDao.getAllRemoteIds(syncPubkey).toSet()
         }
 
-        // Parallel fetch triggers multiple discovery callbacks nearly simultaneously
-        relayManager.fetchLatestParallel(pubkey, kinds, since) { note ->
+        relayManager.fetchLatestParallel(syncPubkey, kinds, since) { note ->
             val noteId = note.optString("id")
-            if (!isReply(note) && !existingIds.contains(noteId)) {
+            val noteAuthor = note.optString("pubkey")
+            
+            // CRITICAL: Only process notes authored by the user we are currently syncing
+            // This prevents Account B's sync from hijacking Account A's local notes.
+            if (noteAuthor == syncPubkey && !isReply(note) && !existingIds.contains(noteId)) {
                 _discoveryCount.value++
-                val draft = processRemoteNote(note, pubkey)
+                val draft = processRemoteNote(note, syncPubkey)
                 
-                // Aggressive Instant Save for Latest mode
                 scope.launch(Dispatchers.IO) {
                     draftDao.syncRemoteNotes(listOf(draft))
                 }
@@ -157,7 +161,7 @@ object HistorySyncManager {
     }
 
     private suspend fun performSync(
-        pubkey: String,
+        syncPubkey: String,
         relayManager: RelayManager,
         draftDao: DraftDao,
         since: Long? = null,
@@ -167,7 +171,7 @@ object HistorySyncManager {
         val kinds = listOf(1, 6, 16, 20, 22, 9802)
         
         val existingIds = withContext(Dispatchers.IO) {
-            draftDao.getAllRemoteIds(pubkey).toSet()
+            draftDao.getAllRemoteIds(syncPubkey).toSet()
         }
 
         val saverJob = launch(Dispatchers.IO) {
@@ -184,7 +188,7 @@ object HistorySyncManager {
 
         try {
             relayManager.fetchHistoryFromRelays(
-                pubkey,
+                syncPubkey,
                 kinds,
                 since = since,
                 until = until,
@@ -200,9 +204,12 @@ object HistorySyncManager {
                 }
             ) { note ->
                 val noteId = note.optString("id")
-                if (!isReply(note) && !existingIds.contains(noteId)) {
+                val noteAuthor = note.optString("pubkey")
+                
+                // CRITICAL: Only process notes authored by the user we are currently syncing
+                if (noteAuthor == syncPubkey && !isReply(note) && !existingIds.contains(noteId)) {
                     _discoveryCount.value++
-                    val draft = processRemoteNote(note, pubkey)
+                    val draft = processRemoteNote(note, syncPubkey)
                     
                     if (_discoveryCount.value % 25 == 0) {
                         NotificationHelper.showSyncProgressNotification(
@@ -241,7 +248,7 @@ object HistorySyncManager {
         activeJob?.cancel()
     }
 
-    private fun isReply(json: JSONObject): Boolean {
+    fun isReply(json: JSONObject): Boolean {
         if (json.optInt("kind") == 1) {
             val tags = json.optJSONArray("tags")
             if (tags != null) {
@@ -262,7 +269,7 @@ object HistorySyncManager {
         return false
     }
 
-    private fun processRemoteNote(json: JSONObject, currentPk: String): Draft {
+    fun processRemoteNote(json: JSONObject, currentPk: String): Draft {
         val kind = json.optInt("kind")
         var content = json.optString("content", "")
         val eventId = json.optString("id")

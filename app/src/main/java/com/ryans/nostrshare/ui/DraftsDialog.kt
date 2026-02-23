@@ -2,10 +2,13 @@ package com.ryans.nostrshare.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
@@ -15,6 +18,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import coil.request.videoFrameMillis
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Link
@@ -43,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import coil.compose.AsyncImage
 import com.ryans.nostrshare.ProcessTextViewModel
 import com.ryans.nostrshare.data.Draft
@@ -142,7 +147,7 @@ fun DraftsHistoryContent(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun DraftsHistoryList(
     vm: ProcessTextViewModel,
@@ -153,6 +158,7 @@ fun DraftsHistoryList(
     onOpenInClient: (String) -> Unit,
     onRepost: (Draft) -> Unit
 ) {
+    val haptic = LocalHapticFeedback.current
     val drafts by vm.uiDrafts.collectAsState()
     val scheduled by vm.uiScheduled.collectAsState()
     val history by vm.uiHistory.collectAsState()
@@ -174,7 +180,7 @@ fun DraftsHistoryList(
             when (selectedTab) {
                 0 -> DraftList(
                     drafts = drafts, 
-                    isFiltered = activeFilters.isNotEmpty() || vm.searchQuery.isNotBlank(),
+                    isFiltered = activeFilters.isNotEmpty() || vm.searchQuery.isNotBlank() || vm.activeHashtags.isNotEmpty(),
                     onSelect = onEditDraft, 
                     onDelete = { vm.deleteDraft(it.id) }, 
                     vm = vm, 
@@ -182,7 +188,7 @@ fun DraftsHistoryList(
                 )
                 1 -> ScheduledList(
                     pending = scheduled, 
-                    isFiltered = activeFilters.isNotEmpty() || vm.searchQuery.isNotBlank(),
+                    isFiltered = activeFilters.isNotEmpty() || vm.searchQuery.isNotBlank() || vm.activeHashtags.isNotEmpty(),
                     vm = vm, 
                     onCancel = { vm.cancelScheduledNote(it) }, 
                     onEditAndReschedule = onEditAndReschedule, 
@@ -243,6 +249,7 @@ fun DraftsHistoryList(
                     modifier = Modifier
                         .padding(bottom = 12.dp)
                         .width(260.dp)
+                        .heightIn(max = 750.dp) // Extend dialog as high as possible
                         .clickable(enabled = true, onClick = {}, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null), // Consume clicks
                     shape = MaterialTheme.shapes.medium,
                     tonalElevation = 8.dp,
@@ -285,7 +292,7 @@ fun DraftsHistoryList(
                         
                         Spacer(Modifier.height(12.dp))
 
-                        var showPostTypes by remember { mutableStateOf(true) }
+                        var showPostTypes by remember { mutableStateOf(false) }
                         var showMediaFilters by remember { mutableStateOf(false) }
 
                         // Section 1: Post Types
@@ -307,7 +314,7 @@ fun DraftsHistoryList(
                             }
                             
                             androidx.compose.animation.AnimatedVisibility(visible = showPostTypes) {
-                                androidx.compose.foundation.layout.FlowRow(
+                                FlowRow(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     maxItemsInEachRow = 2
@@ -354,7 +361,7 @@ fun DraftsHistoryList(
                             }
                             
                             androidx.compose.animation.AnimatedVisibility(visible = showMediaFilters) {
-                                androidx.compose.foundation.layout.FlowRow(
+                                FlowRow(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     maxItemsInEachRow = 2
@@ -379,9 +386,106 @@ fun DraftsHistoryList(
                             }
                         }
 
-                        if (activeFilters.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+
+                        // Section 3: Hashtags
+                        val topTags by vm.topHashtags.collectAsState()
+                        if (topTags.isNotEmpty()) {
+                            var showHashtags by remember { mutableStateOf(false) }
+                            Column(Modifier.fillMaxWidth().weight(1f, fill = false)) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { showHashtags = !showHashtags }
+                                        .padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Hashtags", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                                        Spacer(Modifier.width(8.dp))
+                                        IconButton(
+                                            onClick = { vm.isHashtagManageMode = !vm.isHashtagManageMode },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (vm.isHashtagManageMode) Icons.Default.Check else Icons.Default.Edit,
+                                                contentDescription = "Manage",
+                                                modifier = Modifier.size(16.dp),
+                                                tint = if (vm.isHashtagManageMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    Icon(
+                                        imageVector = if (showHashtags) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                
+                                androidx.compose.animation.AnimatedVisibility(visible = showHashtags, modifier = Modifier.weight(1f, fill = false)) {
+                                    val hiddenTags by vm.hiddenHashtags.collectAsState()
+
+                                    Box(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            topTags.forEach { (tag, _) ->
+                                                val isHidden = hiddenTags.contains(tag)
+                                                val selected = vm.activeHashtags.contains(tag)
+                                                
+                                                if (vm.isHashtagManageMode || !isHidden) {
+                                                    FilterChip(
+                                                        selected = if (vm.isHashtagManageMode) isHidden else selected,
+                                                        onClick = { 
+                                                            if (vm.isHashtagManageMode) {
+                                                                vm.toggleHashtagHidden(tag)
+                                                            } else {
+                                                                vm.toggleHashtag(tag) 
+                                                            }
+                                                        },
+                                                        label = { Text(tag, style = MaterialTheme.typography.labelSmall) },
+                                                        leadingIcon = {
+                                                            if (vm.isHashtagManageMode && isHidden) {
+                                                                Icon(Icons.Default.Close, null, Modifier.size(12.dp))
+                                                            } else if (!vm.isHashtagManageMode && selected) {
+                                                                Icon(Icons.Default.Check, null, Modifier.size(10.dp))
+                                                            }
+                                                        },
+                                                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                                        colors = if (vm.isHashtagManageMode && isHidden) {
+                                                            FilterChipDefaults.filterChipColors(
+                                                                selectedContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                                                                selectedLabelColor = MaterialTheme.colorScheme.error
+                                                            )
+                                                        } else FilterChipDefaults.filterChipColors()
+                                                    )
+                                                }
+                                            }
+                                            
+                                            if (hiddenTags.isNotEmpty()) {
+                                                IconButton(
+                                                    onClick = { vm.resetHiddenHashtags() },
+                                                    modifier = Modifier.size(32.dp).align(Alignment.CenterVertically)
+                                                ) {
+                                                    Icon(Icons.Default.Refresh, "Reset hidden tags", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                        }
+
+                        if (activeFilters.isNotEmpty() || vm.activeHashtags.isNotEmpty()) {
                             TextButton(
-                                onClick = { vm.activeHistoryFilters.clear() },
+                                onClick = { 
+                                    vm.activeHistoryFilters.clear()
+                                    vm.activeHashtags.clear()
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                                 contentPadding = PaddingValues(0.dp)
                             ) {
@@ -394,7 +498,7 @@ fun DraftsHistoryList(
 
             FloatingActionButton(
                 onClick = { showFilters = !showFilters },
-                containerColor = if (activeFilters.isNotEmpty() || vm.searchQuery.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+                containerColor = if (activeFilters.isNotEmpty() || vm.searchQuery.isNotEmpty() || vm.activeHashtags.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
                 modifier = Modifier.size(48.dp)
             ) {
                 Icon(
@@ -705,7 +809,8 @@ fun HistoryList(
     LaunchedEffect(listState, history.size, isSyncing) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .collect { lastIndex ->
-                if (lastIndex != null && lastIndex >= history.size - 5 && !isSyncing && !vm.hasReachedEndOfRemoteHistory) {
+                if (lastIndex != null && lastIndex >= history.size - 5 && 
+                    !isSyncing && vm.isFullHistoryEnabled && !vm.hasReachedEndOfRemoteHistory) {
                     onLoadMore()
                 }
             }
@@ -755,7 +860,7 @@ fun HistoryList(
         
         Box(Modifier.fillMaxSize()) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                if (history.isEmpty() && !isFetching) {
+                if (history.isEmpty() && !isSyncing) {
                     item {
                         Box(
                             Modifier
@@ -763,7 +868,7 @@ fun HistoryList(
                                 .padding(bottom = 64.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            val emptyMessage = if (vm.activeHistoryFilters.isNotEmpty() || vm.searchQuery.isNotBlank()) {
+                            val emptyMessage = if (vm.activeHistoryFilters.isNotEmpty() || vm.searchQuery.isNotBlank() || vm.activeHashtags.isNotEmpty()) {
                                 "No items match your filters"
                             } else if (!vm.isFullHistoryEnabled) {
                                 "Enable Full History in settings to fetch remote notes" 
@@ -799,7 +904,7 @@ fun HistoryList(
                     )
                 }
 
-                if (isFetching && history.isNotEmpty()) {
+                if (isSyncing && activeSyncPubkey == vm.pubkey && history.isNotEmpty()) {
                     item {
                         Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp))
@@ -843,15 +948,15 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
     }
 
     val containerColor = when {
+        !note.isRemote && isSuccess -> if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFF1B5E20).copy(alpha = 0.4f) else androidx.compose.ui.graphics.Color(0xFFE8F5E9)
         note.isRemote -> MaterialTheme.colorScheme.surfaceVariant
-        isSuccess -> if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFF1B5E20).copy(alpha = 0.4f) else androidx.compose.ui.graphics.Color(0xFFE8F5E9)
         isCompleted -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)
         else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
     }
 
     val statusColor = when {
+        !note.isRemote && isSuccess -> if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFF81C784) else androidx.compose.ui.graphics.Color(0xFF4CAF50)
         note.isRemote -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-        isSuccess -> if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFF81C784) else androidx.compose.ui.graphics.Color(0xFF4CAF50)
         isCompleted -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.primary
     }
@@ -897,6 +1002,7 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                                 )
                                 Spacer(Modifier.width(4.dp))
                             }
+                            
                             val statusIcon = when {
                                 !isCompleted -> if (note.isScheduled) Icons.Default.Schedule else Icons.Default.Edit
                                 !isSuccess -> Icons.Default.Warning

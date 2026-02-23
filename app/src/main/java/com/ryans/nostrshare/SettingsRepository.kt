@@ -240,4 +240,28 @@ class SettingsRepository(appContext: Context) {
         }
         prefs.edit().putString("known_accounts_json", array.toString()).apply()
     }
+
+    fun getHiddenHashtags(pubkey: String?): Set<String> {
+        if (pubkey == null) return emptySet()
+        return prefs.getStringSet("${pubkey}_hidden_hashtags", emptySet()) ?: emptySet()
+    }
+
+    fun hideHashtag(pubkey: String?, tag: String) {
+        if (pubkey == null) return
+        val current = getHiddenHashtags(pubkey).toMutableSet()
+        current.add(tag.lowercase())
+        prefs.edit().putStringSet("${pubkey}_hidden_hashtags", current).apply()
+    }
+
+    fun removeHiddenHashtag(pubkey: String?, tag: String) {
+        if (pubkey == null) return
+        val current = getHiddenHashtags(pubkey).toMutableSet()
+        current.remove(tag.lowercase())
+        prefs.edit().putStringSet("${pubkey}_hidden_hashtags", current).apply()
+    }
+
+    fun resetHiddenHashtags(pubkey: String?) {
+        if (pubkey == null) return
+        prefs.edit().remove("${pubkey}_hidden_hashtags").apply()
+    }
 }

@@ -67,12 +67,22 @@ class ProcessTextViewModel : ViewModel() {
         HAS_MEDIA, IMAGE, GIF, VIDEO
     }
     var activeHistoryFilters = mutableStateListOf<HistoryFilter>()
+    var activeHashtags = mutableStateListOf<String>()
+    var isHashtagManageMode by mutableStateOf(false)
     
     fun toggleHistoryFilter(filter: HistoryFilter) {
         if (activeHistoryFilters.contains(filter)) {
             activeHistoryFilters.remove(filter)
         } else {
             activeHistoryFilters.add(filter)
+        }
+    }
+
+    fun toggleHashtag(tag: String) {
+        if (activeHashtags.contains(tag)) {
+            activeHashtags.remove(tag)
+        } else {
+            activeHashtags.add(tag)
         }
     }
 
@@ -215,17 +225,71 @@ class ProcessTextViewModel : ViewModel() {
     }.conflate()
      .flowOn(Dispatchers.Default)
 
+    // Hidden Hashtags state (per user)
+    private val _hiddenHashtagsTrigger = MutableStateFlow(0)
+    val hiddenHashtags: StateFlow<Set<String>> = combine(
+        snapshotFlow { pubkey },
+        _hiddenHashtagsTrigger
+    ) { pk, _ ->
+        settingsRepository.getHiddenHashtags(pk)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    fun toggleHashtagHidden(tag: String) {
+        settingsRepository.hideHashtag(pubkey, tag)
+        if (activeHashtags.contains(tag)) activeHashtags.remove(tag)
+        _hiddenHashtagsTrigger.value++
+    }
+
+    fun resetHiddenHashtags() {
+        settingsRepository.resetHiddenHashtags(pubkey)
+        _hiddenHashtagsTrigger.value++
+    }
+
+    // Derived Hashtag Counts Flow (Returns all top tags, UI will handle mode-based visibility)
+    val topHashtags: StateFlow<List<Pair<String, Int>>> = processedHistoryItems
+        .map { items ->
+            withContext(Dispatchers.Default) {
+                val tagMap = mutableMapOf<String, Int>()
+                val hashtagRegex = "#([a-zA-Z0-9_]+)".toRegex()
+                
+                items.forEach { item ->
+                    hashtagRegex.findAll(item.contentSnippet).forEach { match ->
+                        val tag = match.groupValues[1].lowercase()
+                        tagMap[tag] = tagMap.getOrDefault(tag, 0) + 1
+                    }
+                    
+                    item.originalEventJson?.let { 
+                        try {
+                            val tags = JSONObject(it).optJSONArray("tags")
+                            if (tags != null) {
+                                for (i in 0 until tags.length()) {
+                                    val tagArr = tags.optJSONArray(i)
+                                    if (tagArr != null && tagArr.length() >= 2 && tagArr.getString(0) == "t") {
+                                        val tag = tagArr.getString(1).lowercase()
+                                        tagMap[tag] = tagMap.getOrDefault(tag, 0) + 1
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+                tagMap.toList().sortedByDescending { it.second }.take(30)
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // Stage 2: Instant UI Filter - reactive to search and chips
     @OptIn(ExperimentalCoroutinesApi::class)
     val uiHistory: StateFlow<List<HistoryUiModel>> = combine(
         processedHistoryItems,
         snapshotFlow { searchQuery }.debounce(250), 
-        snapshotFlow { activeHistoryFilters.toList() }
-    ) { items, query, filters ->
-        if (query.isBlank() && filters.isEmpty()) return@combine items
+        snapshotFlow { activeHistoryFilters.toList() },
+        snapshotFlow { activeHashtags.toList() }
+    ) { items, query, filters, selectedTags ->
+        if (query.isBlank() && filters.isEmpty() && selectedTags.isEmpty()) return@combine items
         
         withContext(Dispatchers.Default) {
             items.filter { item ->
+                val text = item.contentSnippet.lowercase()
                 val matchesSearch = query.isBlank() || item.contentSnippet.contains(query, ignoreCase = true)
                 
                 val matchesTypeFilter = if (filters.none { it in listOf(HistoryFilter.NOTE, HistoryFilter.HIGHLIGHT, HistoryFilter.REPOST, HistoryFilter.QUOTE, HistoryFilter.MEDIA) }) {
@@ -253,7 +317,6 @@ class ProcessTextViewModel : ViewModel() {
                         } catch (_: Exception) { emptyList<String>() }
                     } ?: emptyList()
                     
-                    val text = item.contentSnippet.lowercase()
                     val hasAnyMedia = mediaUrls.isNotEmpty() || 
                                      text.contains(".jpg") || text.contains(".jpeg") || 
                                      text.contains(".png") || text.contains(".webp") || 
@@ -273,7 +336,14 @@ class ProcessTextViewModel : ViewModel() {
                     }
                 }
 
-                matchesSearch && matchesTypeFilter && matchesMediaFilter
+                val matchesHashtagFilter = if (selectedTags.isEmpty()) {
+                    true
+                } else {
+                    // "Either" logic: item must contain at least one of the selected hashtags
+                    selectedTags.any { tag -> text.contains("#$tag", ignoreCase = true) }
+                }
+
+                matchesSearch && matchesTypeFilter && matchesMediaFilter && matchesHashtagFilter
             }
         }
     }.flowOn(Dispatchers.Default)
@@ -295,7 +365,12 @@ class ProcessTextViewModel : ViewModel() {
 
     fun loadMoreRemoteHistory() {
         val pk = pubkey ?: return
-        HistorySyncManager.startPaginationSync(pk, relayManager, draftDao)
+        HistorySyncManager.startPaginationSync(pk, relayManager, draftDao) { count ->
+            if (count == 0) {
+                hasReachedEndOfRemoteHistory = true
+                settingsRepository.setHistorySyncCompleted(pk, true)
+            }
+        }
     }
 
     fun triggerBackgroundSearchFetch(searchTerm: String) {
@@ -318,11 +393,11 @@ class ProcessTextViewModel : ViewModel() {
                     for (draft in noteChannel) {
                         batch.add(draft)
                         if (batch.size >= 50) {
-                            draftDao.insertDrafts(batch.toList())
+                            draftDao.syncRemoteNotes(batch.toList()) // Use intelligent sync instead of destructive insert
                             batch.clear()
                         }
                     }
-                    if (batch.isNotEmpty()) draftDao.insertDrafts(batch)
+                    if (batch.isNotEmpty()) draftDao.syncRemoteNotes(batch)
                 }
 
                 relayManager.fetchHistoryFromRelays(
@@ -341,8 +416,8 @@ class ProcessTextViewModel : ViewModel() {
                     }
                 ) { note ->
                     val noteId = note.optString("id")
-                    if (!isReply(note) && !existingIdsSet.contains(noteId)) {
-                        val processed = processRemoteNote(note, currentPk)
+                    if (!HistorySyncManager.isReply(note) && !existingIdsSet.contains(noteId)) {
+                        val processed = HistorySyncManager.processRemoteNote(note, currentPk)
                         viewModelScope.launch {
                             noteChannel.send(processed)
                         }
@@ -363,210 +438,6 @@ class ProcessTextViewModel : ViewModel() {
                 )
             }
         }
-    }
-
-    private fun isReply(json: JSONObject): Boolean {
-        if (json.optInt("kind") == 1) {
-            val tags = json.optJSONArray("tags")
-            if (tags != null) {
-                for (i in 0 until tags.length()) {
-                    val tag = tags.optJSONArray(i)
-                    if (tag != null && tag.length() >= 2) {
-                        val tagName = tag.optString(0)
-                        if (tagName == "e" || tagName == "a") {
-                            val marker = if (tag.length() >= 4) tag.optString(3) else ""
-                            if (marker == "reply" || marker == "root") {
-                                return true
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return false
-    }
-
-    private fun processRemoteNote(json: JSONObject, currentPk: String): Draft {
-        val kind = json.optInt("kind")
-        val kindEnum = PostKind.entries.find { it.kind == kind }
-        var content = json.optString("content", "")
-        val eventId = json.optString("id")
-        val createdAt = json.optLong("created_at") * 1000L
-        val tagsArray = json.optJSONArray("tags") ?: JSONArray()
-        
-        var sourceUrl = ""
-        var mediaJson = "[]"
-        var repostOriginalEventJson: String? = null
-        var previewTitle: String? = null
-        
-        var highlightEventId: String? = null
-        var highlightAuthor: String? = null
-        var highlightKind: Int? = null
-        
-        val tags = mutableListOf<List<String>>()
-        for (i in 0 until tagsArray.length()) {
-            val tag = tagsArray.optJSONArray(i)
-            if (tag != null && tag.length() >= 2) {
-                val tagList = mutableListOf<String>()
-                for (j in 0 until tag.length()) {
-                    tagList.add(tag.optString(j))
-                }
-                tags.add(tagList)
-                
-                when (tagList[0]) {
-                    "e" -> if (highlightEventId == null) highlightEventId = tagList[1]
-                    "p" -> if (highlightAuthor == null) highlightAuthor = tagList[1]
-                    "k" -> if (highlightKind == null) highlightKind = tagList[1].toIntOrNull()
-                }
-            }
-        }
-
-        val extractedMedia = mutableListOf<Pair<String, String?>>()
-        tags.forEach { tag ->
-            if (tag.size >= 2) {
-                when (tag[0]) {
-                    "url", "image", "thumb" -> extractedMedia.add(tag[1] to null)
-                    "imeta" -> {
-                        val url = tag.find { it.startsWith("url ") }?.removePrefix("url ")
-                        val mime = tag.find { it.startsWith("m ") }?.removePrefix("m ")
-                        if (url != null) extractedMedia.add(url to mime)
-                    }
-                }
-            }
-        }
-        val uniqueMedia = extractedMedia.filter { it.first.isNotBlank() }.distinctBy { it.first }
-        if (uniqueMedia.isNotEmpty()) {
-            val mediaArray = JSONArray()
-            uniqueMedia.forEach { (url, tagMime) ->
-                val mediaObj = JSONObject()
-                mediaObj.put("id", UUID.randomUUID().toString())
-                mediaObj.put("uri", url)
-                mediaObj.put("uploadedUrl", url)
-                val detectedMime = tagMime ?: run {
-                    val lc = url.lowercase().substringBefore("?")
-                    when {
-                        lc.endsWith(".mp4") || lc.endsWith(".mov") || lc.endsWith(".webm") || lc.endsWith(".avi") || lc.endsWith(".mkv") -> "video/mp4"
-                        lc.endsWith(".gif") -> "image/gif"
-                        lc.endsWith(".png") -> "image/png"
-                        lc.endsWith(".webp") -> "image/webp"
-                        lc.endsWith(".svg") -> "image/svg+xml"
-                        kind == 22 -> "video/mp4"
-                        else -> "image/jpeg"
-                    }
-                }
-                mediaObj.put("mimeType", detectedMime)
-                mediaArray.put(mediaObj)
-            }
-            mediaJson = mediaArray.toString()
-        }
-
-        when (kind) {
-            1 -> {
-                if (sourceUrl.isBlank()) {
-                    sourceUrl = tags.find { it.size >= 2 && (it[0] == "r" || it[0] == "u" || (it[0].length == 1 && it[1].startsWith("http"))) }?.get(1) ?: ""
-                }
-                highlightEventId = eventId
-                highlightAuthor = json.optString("pubkey")
-                highlightKind = 1
-            }
-            6, 16 -> {
-                val eTag = tags.find { it.size >= 2 && it[0] == "e" }
-                
-                if (content.startsWith("{") && content.contains("\"id\"")) {
-                    repostOriginalEventJson = content
-                    if (highlightEventId == null || highlightAuthor == null) {
-                        try {
-                            val innerJson = JSONObject(content)
-                            if (highlightEventId == null) highlightEventId = innerJson.optString("id").takeIf { it.isNotBlank() }
-                            if (highlightAuthor == null) highlightAuthor = innerJson.optString("pubkey").takeIf { it.isNotBlank() }
-                            if (highlightKind == null) highlightKind = innerJson.optInt("kind", 1)
-                        } catch (_: Exception) {}
-                    }
-                }
-                
-                if (eTag != null) {
-                    try {
-                        val relayHint = if (eTag.size >= 3) eTag[2].takeIf { it.startsWith("wss://") } else null
-                        val noteBech32 = NostrUtils.eventIdToNevent(eTag[1], relayHint)
-                        sourceUrl = "nostr:$noteBech32"
-                    } catch (e: Exception) {
-                        sourceUrl = "nostr:${eTag[1]}" 
-                    }
-                }
-            }
-            20, 22 -> {
-                val uniqueMediaUrls = uniqueMedia.map { it.first }
-                if (uniqueMediaUrls.isNotEmpty()) {
-                    if (content.isBlank()) {
-                        content = tags.find { it.size >= 2 && it[0] == "alt" }?.get(1) ?: ""
-                    }
-                    uniqueMediaUrls.forEach { url ->
-                        if (!content.contains(url, ignoreCase = true)) {
-                            content = if (content.isBlank()) url else "$content $url"
-                        }
-                    }
-                    if (sourceUrl.isBlank()) sourceUrl = uniqueMediaUrls[0]
-                }
-            }
-            9802 -> {
-                var rTag = tags.find { it.size >= 2 && (it[0] == "r" || it[0] == "u") }
-                
-                if (rTag == null) {
-                    rTag = tags.find { it.size >= 2 && it[1].startsWith("http") }
-                }
-                
-                sourceUrl = rTag?.get(1) ?: ""
-                
-                if (content.isBlank()) {
-                    content = tags.find { it.size >= 2 && it[0] == "alt" }?.get(1) ?: ""
-                }
-                
-                if (sourceUrl.startsWith("http")) {
-                    val urlRegex = "https?://[^\\s]+".toRegex()
-                    val hasUrl = urlRegex.findAll(content).any { NostrUtils.urlsMatch(it.value, sourceUrl) }
-                    if (!hasUrl) {
-                        content = if (content.isBlank()) sourceUrl else "$content\n\n$sourceUrl"
-                    }
-                }
-                previewTitle = tags.find { it.size >= 2 && it[0] == "title" }?.get(1)
-            }
-        }
-        
-        var previewDescription: String? = null
-        var previewImageUrl: String? = null
-        
-        tags.forEach { tag ->
-            if (tag.size >= 2) {
-                when (tag[0]) {
-                    "image", "thumb" -> if (previewImageUrl == null) previewImageUrl = tag[1]
-                    "description", "summary" -> if (previewDescription == null) previewDescription = tag[1]
-                }
-            }
-        }
-        
-        return Draft(
-            id = eventId.hashCode(),
-            content = content,
-            sourceUrl = sourceUrl,
-            kind = kindEnum?.kind ?: kind,
-            mediaJson = mediaJson,
-            mediaTitle = "",
-            highlightEventId = highlightAuthor,
-            highlightAuthor = highlightAuthor,
-            highlightKind = highlightKind,
-            highlightRelaysJson = if (highlightEventId != null) org.json.JSONArray(tags.filter { it[0] == "e" && it.size >= 3 }.map { it[2] }.distinct()).toString() else null,
-            originalEventJson = repostOriginalEventJson ?: json.toString(),
-            lastEdited = createdAt,
-            pubkey = currentPk,
-            isScheduled = false,
-            isCompleted = true,
-            isRemoteCache = true,
-            publishedEventId = eventId,
-            actualPublishedAt = createdAt,
-            previewTitle = previewTitle,
-            previewDescription = previewDescription,
-            previewImageUrl = previewImageUrl
-        )
     }
 
     var isUploading by mutableStateOf(false)
@@ -1219,7 +1090,7 @@ class ProcessTextViewModel : ViewModel() {
                 currentSigningPurpose = SigningPurpose.UPLOAD_AUTH
                 
                 val pkg = signerPackageName
-                if (pkg != null) {
+                if (pk != null && pkg != null) {
                     val signed = com.ryans.nostrshare.nip55.Nip55.signEventBackground(NostrShareApp.getInstance(), pkg, authEventJson, pk)
                     if (signed != null) {
                         onEventSigned(signed)
