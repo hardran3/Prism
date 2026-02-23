@@ -148,31 +148,31 @@ class ProcessTextViewModel : ViewModel() {
     fun applyInlineMarkdown(symbol: String) {
         val selection = contentValue.selection
         val text = contentValue.text
+        val selStart = selection.min.coerceIn(0, text.length)
+        val selEnd = selection.max.coerceIn(selStart, text.length)
         
         if (selection.collapsed) {
-            // No selection: Insert placeholders and move cursor inside
-            val newText = text.substring(0, selection.start) + symbol + symbol + text.substring(selection.end)
+            val newText = text.substring(0, selStart) + symbol + symbol + text.substring(selEnd)
             contentValue = contentValue.copy(
                 text = newText,
-                selection = TextRange(selection.start + symbol.length)
+                selection = TextRange(selStart + symbol.length)
             )
         } else {
-            // Text selected: Wrap it
-            val selectedText = text.substring(selection.start, selection.end)
+            val selectedText = text.substring(selStart, selEnd)
             val isAlreadyWrapped = selectedText.startsWith(symbol) && selectedText.endsWith(symbol)
             
             val newText = if (isAlreadyWrapped) {
-                text.substring(0, selection.start) + selectedText.removeSurrounding(symbol) + text.substring(selection.end)
+                text.substring(0, selStart) + selectedText.removeSurrounding(symbol) + text.substring(selEnd)
             } else {
-                text.substring(0, selection.start) + symbol + selectedText + symbol + text.substring(selection.end)
+                text.substring(0, selStart) + symbol + selectedText + symbol + text.substring(selEnd)
             }
             
             contentValue = contentValue.copy(
                 text = newText,
                 selection = if (isAlreadyWrapped) {
-                    TextRange(selection.start, selection.end - (symbol.length * 2))
+                    TextRange(selStart, selEnd - (symbol.length * 2))
                 } else {
-                    TextRange(selection.start, selection.end + (symbol.length * 2))
+                    TextRange(selStart, selEnd + (symbol.length * 2))
                 }
             )
         }
@@ -181,10 +181,13 @@ class ProcessTextViewModel : ViewModel() {
     fun applyBlockMarkdown(prefix: String) {
         val selection = contentValue.selection
         val text = contentValue.text
+        val selStart = selection.min.coerceIn(0, text.length)
+        val selEnd = selection.max.coerceIn(selStart, text.length)
         
-        // Identify the start and end of the lines affected
-        var lineStart = text.lastIndexOf('\n', selection.start - 1).let { if (it == -1) 0 else it + 1 }
-        var lineEnd = text.indexOf('\n', selection.end).let { if (it == -1) text.length else it }
+        val lineStart = text.lastIndexOf('\n', (selStart - 1).coerceAtLeast(0)).let { if (it == -1) 0 else it + 1 }
+        val lineEnd = text.indexOf('\n', selEnd).let { if (it == -1) text.length else it }
+        
+        if (lineStart > lineEnd || lineStart > text.length || lineEnd > text.length) return
         
         val lines = text.substring(lineStart, lineEnd).split('\n')
         val allHavePrefix = lines.all { it.startsWith(prefix) }
@@ -204,27 +207,62 @@ class ProcessTextViewModel : ViewModel() {
         )
     }
 
+    fun applyCodeMarkdown() {
+        val selection = contentValue.selection
+        val text = contentValue.text
+        val selStart = selection.min.coerceIn(0, text.length)
+        val selEnd = selection.max.coerceIn(selStart, text.length)
+        val selectedText = text.substring(selStart, selEnd)
+
+        if (selection.collapsed || !selectedText.contains('\n')) {
+            // Single line or no selection: use inline backticks
+            applyInlineMarkdown("`")
+        } else {
+            // Multi-line selection: use fenced code block
+            val isAlreadyFenced = selectedText.startsWith("```") && selectedText.trimEnd().endsWith("```")
+            if (isAlreadyFenced) {
+                // Remove the fences
+                val inner = selectedText.removePrefix("```").substringAfter('\n')
+                    .let { s -> val lastFence = s.lastIndexOf("\n```"); if (lastFence >= 0) s.substring(0, lastFence) else s.removeSuffix("```") }
+                val newText = text.substring(0, selStart) + inner + text.substring(selEnd)
+                contentValue = contentValue.copy(
+                    text = newText,
+                    selection = TextRange(selStart, selStart + inner.length)
+                )
+            } else {
+                val fenced = "```\n$selectedText\n```"
+                val newText = text.substring(0, selStart) + fenced + text.substring(selEnd)
+                contentValue = contentValue.copy(
+                    text = newText,
+                    selection = TextRange(selStart, selStart + fenced.length)
+                )
+            }
+        }
+    }
+
     fun applyLinkMarkdown(clipboardUrl: String?) {
         val selection = contentValue.selection
         val text = contentValue.text
         val url = if (clipboardUrl?.startsWith("http") == true) clipboardUrl else "url"
+        val selStart = selection.min.coerceIn(0, text.length)
+        val selEnd = selection.max.coerceIn(selStart, text.length)
         
         if (selection.collapsed) {
             val link = "[title]($url)"
-            val newText = text.substring(0, selection.start) + link + text.substring(selection.end)
+            val newText = text.substring(0, selStart) + link + text.substring(selEnd)
             contentValue = contentValue.copy(
                 text = newText,
-                selection = TextRange(selection.start + 1, selection.start + 6) // Highlight 'title'
+                selection = TextRange(selStart + 1, selStart + 6)
             )
         } else {
-            val selectedText = text.substring(selection.start, selection.end)
-            val newText = text.substring(0, selection.start) + "[$selectedText]($url)" + text.substring(selection.end)
+            val selectedText = text.substring(selStart, selEnd)
+            val newText = text.substring(0, selStart) + "[$selectedText]($url)" + text.substring(selEnd)
             contentValue = contentValue.copy(
                 text = newText,
                 selection = if (url == "url") {
-                    TextRange(selection.start + selectedText.length + 3, selection.start + selectedText.length + 6)
+                    TextRange(selStart + selectedText.length + 3, selStart + selectedText.length + 6)
                 } else {
-                    TextRange(selection.start, selection.start + selectedText.length + url.length + 4)
+                    TextRange(selStart, selStart + selectedText.length + url.length + 4)
                 }
             )
         }
