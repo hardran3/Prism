@@ -663,24 +663,33 @@ fun IntegratedContent(
             when (seg) {
                 is com.ryans.nostrshare.ui.ContentSegment.Text -> {
                     if (seg.text.trim().isNotBlank()) {
-                        val resolvedText = remember(seg.text, vm.usernameCache.size) {
-                            val npubRegex = "(nostr:)?(npub1|nprofile1)[a-z0-9]+".toRegex(RegexOption.IGNORE_CASE)
-                            npubRegex.replace(seg.text) { match ->
-                                val bech32 = if (match.value.startsWith("nostr:")) match.value.substring(6) else match.value
-                                val pk = try { NostrUtils.findNostrEntity(bech32)?.id } catch(_: Exception) { null }
-                                val name = pk?.let { vm.usernameCache[it]?.name }
-                                if (name != null) "@$name" else match.value
-                            }
+                        val highlightColor = MaterialTheme.colorScheme.primary
+                        val codeColor = MaterialTheme.colorScheme.secondary
+                        val h1Style = MaterialTheme.typography.headlineLarge
+                        val h2Style = MaterialTheme.typography.headlineMedium
+                        val h3Style = MaterialTheme.typography.headlineSmall
+                        
+                        val styledText = remember(seg.text, vm.usernameCache.size) {
+                            com.ryans.nostrshare.utils.MarkdownUtils.renderMarkdown(
+                                text = seg.text,
+                                usernameCache = vm.usernameCache,
+                                highlightColor = highlightColor,
+                                codeColor = codeColor,
+                                h1Style = h1Style,
+                                h2Style = h2Style,
+                                h3Style = h3Style,
+                                stripDelimiters = true
+                            )
                         }
                         
                         if (isHighlight) {
                             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(vertical = 4.dp)) {
                                 Box(Modifier.width(2.dp).fillMaxHeight().background(LocalContentColor.current, RoundedCornerShape(1.dp)))
                                 Spacer(Modifier.width(12.dp))
-                                Text(resolvedText.trim(), style = MaterialTheme.typography.bodyLarge)
+                                Text(styledText, style = MaterialTheme.typography.bodyLarge)
                             }
                         } else {
-                            Text(resolvedText.trim(), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 4.dp))
+                            Text(styledText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 4.dp))
                         }
                     }
                 }

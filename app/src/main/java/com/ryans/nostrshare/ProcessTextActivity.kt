@@ -58,6 +58,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material.icons.filled.FormatSize
 import com.ryans.nostrshare.utils.UnicodeStylizer
+import com.ryans.nostrshare.utils.MarkdownUtils
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -883,107 +884,19 @@ class MarkdownVisualTransformation(
     }
 
     private fun filterStyleOnly(original: String): androidx.compose.ui.text.input.TransformedText {
-        val builder = androidx.compose.ui.text.AnnotatedString.Builder()
-        val lines = original.split('\n')
-
-        // Pre-scan for fenced code blocks
-        val inCodeBlock = BooleanArray(lines.size)
-        val isFenceLine = BooleanArray(lines.size)
-        var fenceOpen = false
-        for (idx in lines.indices) {
-            if (lines[idx].trimStart().startsWith("```")) {
-                isFenceLine[idx] = true
-                if (fenceOpen) { fenceOpen = false } else { fenceOpen = true }
-            } else if (fenceOpen) {
-                inCodeBlock[idx] = true
-            }
-        }
-
-        lines.forEachIndexed { i, line ->
-            when {
-                isFenceLine[i] -> {
-                    // Style the ``` fence line as dimmed code
-                    builder.withStyle(androidx.compose.ui.text.SpanStyle(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = codeColor.copy(alpha = 0.5f)
-                    )) { builder.append(line) }
-                }
-                inCodeBlock[i] -> {
-                    // Style code block content with monospace + background
-                    builder.withStyle(androidx.compose.ui.text.SpanStyle(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        background = codeColor.copy(alpha = 0.1f),
-                        color = codeColor
-                    )) { builder.append(line) }
-                }
-                line.startsWith("#") -> {
-                    val level = line.takeWhile { it == '#' }.length
-                    val style = when(level) {
-                        1 -> h1Style
-                        2 -> h2Style
-                        else -> h3Style
-                    }
-                    builder.withStyle(androidx.compose.ui.text.SpanStyle(
-                        fontSize = style?.fontSize ?: androidx.compose.ui.unit.TextUnit.Unspecified,
-                        fontWeight = FontWeight.Bold,
-                        color = highlightColor
-                    )) { builder.append(line) }
-                }
-                line.startsWith(">") -> {
-                    builder.withStyle(androidx.compose.ui.text.SpanStyle(
-                        color = quoteColor,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        background = quoteColor.copy(alpha = 0.05f)
-                    )) { builder.append(line) }
-                }
-                line.startsWith("- ") || line.startsWith("* ") || line.contains(Regex("^\\d+\\. ")) -> {
-                    builder.withStyle(androidx.compose.ui.text.SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) {
-                        val prefix = line.takeWhile { it != ' ' } + " "
-                        builder.append(prefix)
-                    }
-                    builder.append(line.substringAfter(" "))
-                }
-                else -> {
-                    var lastIdx = 0
-                    val pattern = "(https?://[^\\s]+|nostr:(?:nevent1|note1|naddr1|npub1|nprofile1)[a-z0-9]+|\\*\\*.*?\\*\\*|__.*?__|\\*.*?\\*|_.*?_|`.*?`|#\\w+)".toRegex(RegexOption.IGNORE_CASE)
-
-                    pattern.findAll(line).forEach { match ->
-                        builder.append(line.substring(lastIdx, match.range.first))
-                        val m = match.value
-                        when {
-                            m.startsWith("http") -> {
-                                builder.withStyle(androidx.compose.ui.text.SpanStyle(color = linkColor, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) { builder.append(m) }
-                            }
-                            m.startsWith("nostr:") -> {
-                                val entity = m.removePrefix("nostr:")
-                                val pk = try { NostrUtils.findNostrEntity(entity)?.id } catch(_: Exception) { null }
-                                val name = pk?.let { usernameCache[it]?.name }
-                                builder.withStyle(androidx.compose.ui.text.SpanStyle(color = nostrColor, fontWeight = FontWeight.Bold)) {
-                                    builder.append(if (name != null) "@$name" else m)
-                                }
-                            }
-                            m.startsWith("**") || m.startsWith("__") -> {
-                                builder.withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) { builder.append(m) }
-                            }
-                            m.startsWith("*") || m.startsWith("_") -> {
-                                builder.withStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) { builder.append(m) }
-                            }
-                            m.startsWith("`") -> {
-                                builder.withStyle(androidx.compose.ui.text.SpanStyle(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, background = codeColor.copy(alpha = 0.1f), color = codeColor)) { builder.append(m) }
-                            }
-                            m.startsWith("#") -> {
-                                builder.withStyle(androidx.compose.ui.text.SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) { builder.append(m) }
-                            }
-                            else -> builder.append(m)
-                        }
-                        lastIdx = match.range.last + 1
-                    }
-                    builder.append(line.substring(lastIdx))
-                }
-            }
-            if (i < lines.size - 1) builder.append("\n")
-        }
-        return androidx.compose.ui.text.input.TransformedText(builder.toAnnotatedString(), androidx.compose.ui.text.input.OffsetMapping.Identity)
+        val styledText = MarkdownUtils.renderMarkdown(
+            text = original,
+            usernameCache = usernameCache,
+            highlightColor = highlightColor,
+            codeColor = codeColor,
+            linkColor = linkColor,
+            nostrColor = nostrColor,
+            h1Style = h1Style,
+            h2Style = h2Style,
+            h3Style = h3Style,
+            stripDelimiters = stripDelimiters
+        )
+        return androidx.compose.ui.text.input.TransformedText(styledText, androidx.compose.ui.text.input.OffsetMapping.Identity)
     }
 }
 
