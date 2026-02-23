@@ -250,9 +250,19 @@ fun DraftsHistoryList(
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                 ) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("Filters & Search", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.height(8.dp))
-                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Full History", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                            Switch(
+                                checked = vm.isFullHistoryEnabled,
+                                onCheckedChange = { vm.toggleFullHistory() },
+                                modifier = Modifier.scale(0.8f)
+                            )
+                        }
+
                         OutlinedTextField(
                             value = vm.searchQuery,
                             onValueChange = { 
@@ -887,17 +897,22 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                                 )
                                 Spacer(Modifier.width(4.dp))
                             }
-                            Icon(
-                                if (isCompleted) {
-                                    if (isSuccess) Icons.Default.Check
-                                    else Icons.Default.Warning
-                                } else if (note.isScheduled) Icons.Default.Schedule
-                                else Icons.Default.Edit,
-                                null,
-                                modifier = Modifier.size(16.dp),
-                                tint = statusColor
-                            )
-                            Spacer(Modifier.width(4.dp))
+                            val statusIcon = when {
+                                !isCompleted -> if (note.isScheduled) Icons.Default.Schedule else Icons.Default.Edit
+                                !isSuccess -> Icons.Default.Warning
+                                !note.isRemote -> Icons.Default.Check
+                                else -> null
+                            }
+
+                            if (statusIcon != null) {
+                                Icon(
+                                    imageVector = statusIcon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = statusColor
+                                )
+                                Spacer(Modifier.width(4.dp))
+                            }
                             
                             val displayTime = remember(note.scheduledAt, note.actualPublishedAt, note.timestamp) {
                                 val scheduledStr = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(note.timestamp))

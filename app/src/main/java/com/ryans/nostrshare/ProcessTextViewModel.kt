@@ -191,7 +191,7 @@ class ProcessTextViewModel : ViewModel() {
                             contentSnippet = if (draft.content.length > 500) draft.content.take(500) + "..." else draft.content,
                             timestamp = draft.actualPublishedAt ?: draft.scheduledAt ?: draft.lastEdited,
                             pubkey = draft.pubkey,
-                            isRemote = draft.isRemote,
+                            isRemote = draft.isRemoteCache && !draft.isScheduled,
                             isScheduled = draft.isScheduled,
                             isCompleted = draft.isCompleted,
                             isSuccess = draft.isCompleted && draft.publishError == null,
