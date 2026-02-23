@@ -111,6 +111,7 @@ object NostrUtils {
             9802 -> "Highlight"
             6, 16 -> "Repost"
             20, 22 -> "Media Note"
+            30023 -> "Article"
             else -> "Kind $kind"
         }
     }

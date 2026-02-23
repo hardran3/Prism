@@ -3,7 +3,7 @@ package com.ryans.nostrshare.data
 import android.content.Context
 import androidx.room.*
 
-@Database(entities = [Draft::class], version = 11, exportSchema = false)
+@Database(entities = [Draft::class], version = 12, exportSchema = false)
 abstract class DraftDatabase : RoomDatabase() {
     abstract fun draftDao(): DraftDao
 
@@ -48,6 +48,14 @@ abstract class DraftDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_11_12 = object : androidx.room.migration.Migration(11, 12) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE drafts ADD COLUMN articleTitle TEXT")
+                database.execSQL("ALTER TABLE drafts ADD COLUMN articleSummary TEXT")
+                database.execSQL("ALTER TABLE drafts ADD COLUMN articleIdentifier TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): DraftDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -55,7 +63,7 @@ abstract class DraftDatabase : RoomDatabase() {
                     DraftDatabase::class.java,
                     "prism_database"
                 )
-                .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+                .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                 .fallbackToDestructiveMigration(true)
                 .build()
                 INSTANCE = instance

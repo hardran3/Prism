@@ -321,6 +321,7 @@ fun DraftsHistoryList(
                                 ) {
                                     val types = listOf(
                                         "Note" to ProcessTextViewModel.HistoryFilter.NOTE,
+                                        "Article" to ProcessTextViewModel.HistoryFilter.ARTICLE,
                                         "Highlight" to ProcessTextViewModel.HistoryFilter.HIGHLIGHT,
                                         "Media" to ProcessTextViewModel.HistoryFilter.MEDIA,
                                         "Repost" to ProcessTextViewModel.HistoryFilter.REPOST,
@@ -539,7 +540,50 @@ fun DraftList(
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
             items(drafts, key = { it.id }) { draft ->
-                DraftItem(draft, onSelect, onDelete, vm, onMediaClick)
+                val uiModel = HistoryUiModel(
+                    id = "local_${draft.id}",
+                    localId = draft.id,
+                    contentSnippet = draft.content,
+                    timestamp = draft.lastEdited,
+                    pubkey = draft.pubkey,
+                    isRemote = false,
+                    isScheduled = draft.isScheduled,
+                    isCompleted = draft.isCompleted,
+                    isSuccess = draft.isCompleted && draft.publishError == null,
+                    isOfflineRetry = draft.isOfflineRetry,
+                    publishError = draft.publishError,
+                    kind = draft.kind,
+                    isQuote = draft.isQuote,
+                    actualPublishedAt = draft.actualPublishedAt,
+                    scheduledAt = draft.scheduledAt,
+                    sourceUrl = draft.sourceUrl,
+                    previewTitle = draft.previewTitle,
+                    previewImageUrl = draft.previewImageUrl,
+                    previewDescription = draft.previewDescription,
+                    previewSiteName = draft.previewSiteName,
+                    mediaJson = draft.mediaJson,
+                    originalEventJson = draft.originalEventJson,
+                    articleTitle = draft.articleTitle,
+                    articleSummary = draft.articleSummary,
+                    articleIdentifier = draft.articleIdentifier
+                )
+
+                if (draft.kind == 30023) {
+                    ArticlePostItem(
+                        note = uiModel,
+                        vm = vm,
+                        onMediaClick = onMediaClick,
+                        actions = {
+                            TextButton(onClick = { onSelect(draft) }) {
+                                Icon(Icons.Default.Edit, null, Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Edit")
+                            }
+                        }
+                    )
+                } else {
+                    DraftItem(draft, onSelect, onDelete, vm, onMediaClick)
+                }
             }
             item { Spacer(Modifier.height(80.dp)) }
         }
@@ -740,48 +784,75 @@ fun ScheduledList(
     } else {
         LazyColumn(Modifier.fillMaxSize()) {
             items(pending, key = { it.id }) { note ->
-                UnifiedPostItem(
-                    note = HistoryUiModel(
-                        id = "local_${note.id}",
-                        localId = note.id,
-                        contentSnippet = note.content,
-                        timestamp = note.scheduledAt ?: note.lastEdited,
-                        pubkey = note.pubkey,
-                        isRemote = false,
-                        isScheduled = note.isScheduled,
-                        isCompleted = note.isCompleted,
-                        isSuccess = note.isCompleted && note.publishError == null,
-                        isOfflineRetry = note.isOfflineRetry,
-                        publishError = note.publishError,
-                        kind = note.kind,
-                        isQuote = note.isQuote,
-                        actualPublishedAt = note.actualPublishedAt,
-                        scheduledAt = note.scheduledAt,
-                        sourceUrl = note.sourceUrl,
-                        previewTitle = note.previewTitle,
-                        previewImageUrl = note.previewImageUrl,
-                        previewDescription = note.previewDescription,
-                        previewSiteName = note.previewSiteName,
-                        mediaJson = note.mediaJson,
-                        originalEventJson = note.originalEventJson
-                    ),
-                    vm = vm,
-                    onMediaClick = onMediaClick,
-                    actions = {
-                        Row {
-                            TextButton(onClick = { onSaveToDrafts(note) }) {
-                                Icon(Icons.Default.Save, null, Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("To Drafts")
-                            }
-                            TextButton(onClick = { onEditAndReschedule(note) }) {
-                                Icon(Icons.Default.Edit, null, Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Edit")
+                val uiModel = HistoryUiModel(
+                    id = "local_${note.id}",
+                    localId = note.id,
+                    contentSnippet = note.content,
+                    timestamp = note.scheduledAt ?: note.lastEdited,
+                    pubkey = note.pubkey,
+                    isRemote = false,
+                    isScheduled = note.isScheduled,
+                    isCompleted = note.isCompleted,
+                    isSuccess = note.isCompleted && note.publishError == null,
+                    isOfflineRetry = note.isOfflineRetry,
+                    publishError = note.publishError,
+                    kind = note.kind,
+                    isQuote = note.isQuote,
+                    actualPublishedAt = note.actualPublishedAt,
+                    scheduledAt = note.scheduledAt,
+                    sourceUrl = note.sourceUrl,
+                    previewTitle = note.previewTitle,
+                    previewImageUrl = note.previewImageUrl,
+                    previewDescription = note.previewDescription,
+                    previewSiteName = note.previewSiteName,
+                    mediaJson = note.mediaJson,
+                    originalEventJson = note.originalEventJson,
+                    articleTitle = note.articleTitle,
+                    articleSummary = note.articleSummary,
+                    articleIdentifier = note.articleIdentifier
+                )
+
+                if (note.kind == 30023) {
+                    ArticlePostItem(
+                        note = uiModel,
+                        vm = vm,
+                        onMediaClick = onMediaClick,
+                        actions = {
+                            Row {
+                                TextButton(onClick = { onSaveToDrafts(note) }) {
+                                    Icon(Icons.Default.Save, null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("To Drafts")
+                                }
+                                TextButton(onClick = { onEditAndReschedule(note) }) {
+                                    Icon(Icons.Default.Edit, null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Edit")
+                                }
                             }
                         }
-                    }
-                )
+                    )
+                } else {
+                    UnifiedPostItem(
+                        note = uiModel,
+                        vm = vm,
+                        onMediaClick = onMediaClick,
+                        actions = {
+                            Row {
+                                TextButton(onClick = { onSaveToDrafts(note) }) {
+                                    Icon(Icons.Default.Save, null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("To Drafts")
+                                }
+                                TextButton(onClick = { onEditAndReschedule(note) }) {
+                                    Icon(Icons.Default.Edit, null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Edit")
+                                }
+                            }
+                        }
+                    )
+                }
             }
             item { Spacer(Modifier.height(80.dp)) }
         }
@@ -881,18 +952,16 @@ fun HistoryList(
                 }
 
                 items(history, key = { it.id }) { note ->
-                    UnifiedPostItem(
-                        note = note,
-                        vm = vm,
-                        onMediaClick = onMediaClick,
-                        actions = {
-                            if (note.id.startsWith("local_") || !note.isRemote) {
-                                // Handled via other tabs
-                            } else if (note.isSuccess) {
+                    if (note.kind == 30023) {
+                        ArticlePostItem(
+                            note = note,
+                            vm = vm,
+                            onMediaClick = onMediaClick,
+                            actions = {
                                 TextButton(onClick = { onRepost(note) }) {
-                                    Icon(Icons.Default.Schedule, null, Modifier.size(16.dp))
+                                    Icon(Icons.Default.Edit, null, Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("Repost")
+                                    Text("Edit")
                                 }
                                 TextButton(onClick = { onOpenInClient(note.id) }) {
                                     Icon(Icons.Default.Link, null, Modifier.size(16.dp))
@@ -900,8 +969,30 @@ fun HistoryList(
                                     Text("Open")
                                 }
                             }
-                        }
-                    )
+                        )
+                    } else {
+                        UnifiedPostItem(
+                            note = note,
+                            vm = vm,
+                            onMediaClick = onMediaClick,
+                            actions = {
+                                if (note.id.startsWith("local_") || !note.isRemote) {
+                                    // Handled via other tabs
+                                } else if (note.isSuccess) {
+                                    TextButton(onClick = { onRepost(note) }) {
+                                        Icon(Icons.Default.Schedule, null, Modifier.size(16.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Repost")
+                                    }
+                                    TextButton(onClick = { onOpenInClient(note.id) }) {
+                                        Icon(Icons.Default.Link, null, Modifier.size(16.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Open")
+                                    }
+                                }
+                            }
+                        )
+                    }
                 }
 
                 if (isSyncing && activeSyncPubkey == vm.pubkey && history.isNotEmpty()) {
@@ -1626,6 +1717,75 @@ fun ResponsiveMediaGrid(mediaItems: List<MediaUploadState>, onMediaClick: (Media
                             Text(text = "+${mediaItems.size - 3}", color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ArticlePostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick: (MediaUploadState) -> Unit, actions: @Composable () -> Unit) {
+    val date = remember(note.timestamp) { NostrUtils.formatDate(note.timestamp) }
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+            .animateContentSize(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column {
+            if (note.previewImageUrl != null) {
+                AsyncImage(
+                    model = note.previewImageUrl,
+                    contentDescription = "Cover Image",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f/9f)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            
+            Column(Modifier.padding(16.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Article", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    Text(date, style = MaterialTheme.typography.labelSmall)
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                Text(
+                    text = note.articleTitle ?: "Untitled Article",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                
+                if (!note.articleSummary.isNullOrBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = note.articleSummary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = note.contentSnippet,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    actions()
                 }
             }
         }

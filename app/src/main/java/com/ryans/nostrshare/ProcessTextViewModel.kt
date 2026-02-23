@@ -24,35 +24,10 @@ import org.json.JSONObject
 import org.json.JSONArray
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import com.ryans.nostrshare.data.Draft
 import com.ryans.nostrshare.utils.HistorySyncManager
-
-// Lightweight UI model to prevent OOM and lag
-data class HistoryUiModel(
-    val id: String,
-    val localId: Int,
-    val contentSnippet: String,
-    val timestamp: Long,
-    val pubkey: String?,
-    val isRemote: Boolean,
-    val isScheduled: Boolean,
-    val isCompleted: Boolean,
-    val isSuccess: Boolean,
-    val isOfflineRetry: Boolean,
-    val publishError: String?,
-    val kind: Int,
-    val isQuote: Boolean,
-    val actualPublishedAt: Long?,
-    val scheduledAt: Long?,
-    val sourceUrl: String?,
-    val previewTitle: String?,
-    val previewImageUrl: String?,
-    val previewDescription: String?,
-    val previewSiteName: String?,
-    val mediaJson: String?,
-    val originalEventJson: String?,
-    val segments: List<com.ryans.nostrshare.ui.ContentSegment> = emptyList()
-)
 
 enum class OnboardingStep {
     WELCOME,
@@ -63,7 +38,7 @@ enum class OnboardingStep {
 
 class ProcessTextViewModel : ViewModel() {
     enum class HistoryFilter { 
-        NOTE, HIGHLIGHT, MEDIA, REPOST, QUOTE,
+        NOTE, HIGHLIGHT, MEDIA, REPOST, QUOTE, ARTICLE,
         HAS_MEDIA, IMAGE, GIF, VIDEO
     }
     var activeHistoryFilters = mutableStateListOf<HistoryFilter>()
@@ -86,7 +61,14 @@ class ProcessTextViewModel : ViewModel() {
         }
     }
 
-    var quoteContent by mutableStateOf("")
+    // Advanced selection-aware content state
+    var contentValue by mutableStateOf(TextFieldValue(""))
+    
+    // Legacy bridge for existing logic
+    var quoteContent: String 
+        get() = contentValue.text
+        set(value) { contentValue = contentValue.copy(text = value) }
+
     var sourceUrl by mutableStateOf("")
     var mediaTitle by mutableStateOf("") 
     var isPublishing by mutableStateOf(false)
@@ -96,6 +78,11 @@ class ProcessTextViewModel : ViewModel() {
     var signerPackageName by mutableStateOf<String?>(null)
     var userProfile by mutableStateOf<UserProfile?>(null)
     
+    // Long-form state
+    var articleTitle by mutableStateOf("")
+    var articleSummary by mutableStateOf("")
+    var articleIdentifier by mutableStateOf<String?>(null)
+
     // Highlight Metadata (NIP-84)
     var highlightEventId by mutableStateOf<String?>(null)
     var highlightAuthor by mutableStateOf<String?>(null)
@@ -155,6 +142,93 @@ class ProcessTextViewModel : ViewModel() {
     val settingsRepository by lazy { SettingsRepository(NostrShareApp.getInstance()) }
     val relayManager by lazy { RelayManager(NostrShareApp.getInstance().client, settingsRepository) }
     private val draftDao by lazy { NostrShareApp.getInstance().database.draftDao() }
+
+    // --- Markdown Engine Logic ---
+
+    fun applyInlineMarkdown(symbol: String) {
+        val selection = contentValue.selection
+        val text = contentValue.text
+        
+        if (selection.collapsed) {
+            // No selection: Insert placeholders and move cursor inside
+            val newText = text.substring(0, selection.start) + symbol + symbol + text.substring(selection.end)
+            contentValue = contentValue.copy(
+                text = newText,
+                selection = TextRange(selection.start + symbol.length)
+            )
+        } else {
+            // Text selected: Wrap it
+            val selectedText = text.substring(selection.start, selection.end)
+            val isAlreadyWrapped = selectedText.startsWith(symbol) && selectedText.endsWith(symbol)
+            
+            val newText = if (isAlreadyWrapped) {
+                text.substring(0, selection.start) + selectedText.removeSurrounding(symbol) + text.substring(selection.end)
+            } else {
+                text.substring(0, selection.start) + symbol + selectedText + symbol + text.substring(selection.end)
+            }
+            
+            contentValue = contentValue.copy(
+                text = newText,
+                selection = if (isAlreadyWrapped) {
+                    TextRange(selection.start, selection.end - (symbol.length * 2))
+                } else {
+                    TextRange(selection.start, selection.end + (symbol.length * 2))
+                }
+            )
+        }
+    }
+
+    fun applyBlockMarkdown(prefix: String) {
+        val selection = contentValue.selection
+        val text = contentValue.text
+        
+        // Identify the start and end of the lines affected
+        var lineStart = text.lastIndexOf('\n', selection.start - 1).let { if (it == -1) 0 else it + 1 }
+        var lineEnd = text.indexOf('\n', selection.end).let { if (it == -1) text.length else it }
+        
+        val lines = text.substring(lineStart, lineEnd).split('\n')
+        val allHavePrefix = lines.all { it.startsWith(prefix) }
+        
+        val newLines = if (allHavePrefix) {
+            lines.map { it.removePrefix(prefix) }
+        } else {
+            lines.map { if (it.startsWith(prefix)) it else "$prefix$it" }
+        }
+        
+        val newBlock = newLines.joinToString("\n")
+        val newText = text.substring(0, lineStart) + newBlock + text.substring(lineEnd)
+        
+        contentValue = contentValue.copy(
+            text = newText,
+            selection = TextRange(lineStart, lineStart + newBlock.length)
+        )
+    }
+
+    fun applyLinkMarkdown(clipboardUrl: String?) {
+        val selection = contentValue.selection
+        val text = contentValue.text
+        val url = if (clipboardUrl?.startsWith("http") == true) clipboardUrl else "url"
+        
+        if (selection.collapsed) {
+            val link = "[title]($url)"
+            val newText = text.substring(0, selection.start) + link + text.substring(selection.end)
+            contentValue = contentValue.copy(
+                text = newText,
+                selection = TextRange(selection.start + 1, selection.start + 6) // Highlight 'title'
+            )
+        } else {
+            val selectedText = text.substring(selection.start, selection.end)
+            val newText = text.substring(0, selection.start) + "[$selectedText]($url)" + text.substring(selection.end)
+            contentValue = contentValue.copy(
+                text = newText,
+                selection = if (url == "url") {
+                    TextRange(selection.start + selectedText.length + 3, selection.start + selectedText.length + 6)
+                } else {
+                    TextRange(selection.start, selection.start + selectedText.length + url.length + 4)
+                }
+            )
+        }
+    }
 
     // --- Optimized Data Flows ---
 
@@ -217,7 +291,10 @@ class ProcessTextViewModel : ViewModel() {
                             previewDescription = draft.previewDescription,
                             previewSiteName = draft.previewSiteName,
                             mediaJson = draft.mediaJson,
-                            originalEventJson = draft.originalEventJson
+                            originalEventJson = draft.originalEventJson,
+                            articleTitle = draft.articleTitle,
+                            articleSummary = draft.articleSummary,
+                            articleIdentifier = draft.articleIdentifier
                         )
                     }
             }
@@ -292,7 +369,7 @@ class ProcessTextViewModel : ViewModel() {
                 val text = item.contentSnippet.lowercase()
                 val matchesSearch = query.isBlank() || item.contentSnippet.contains(query, ignoreCase = true)
                 
-                val matchesTypeFilter = if (filters.none { it in listOf(HistoryFilter.NOTE, HistoryFilter.HIGHLIGHT, HistoryFilter.REPOST, HistoryFilter.QUOTE, HistoryFilter.MEDIA) }) {
+                val matchesTypeFilter = if (filters.none { it in listOf(HistoryFilter.NOTE, HistoryFilter.HIGHLIGHT, HistoryFilter.REPOST, HistoryFilter.QUOTE, HistoryFilter.MEDIA, HistoryFilter.ARTICLE) }) {
                     true
                 } else {
                     filters.any { filter ->
@@ -302,6 +379,7 @@ class ProcessTextViewModel : ViewModel() {
                             HistoryFilter.MEDIA -> item.kind == 20 || item.kind == 22
                             HistoryFilter.REPOST -> item.kind == 6 || item.kind == 16
                             HistoryFilter.QUOTE -> item.isQuote
+                            HistoryFilter.ARTICLE -> item.kind == 30023
                             else -> false
                         }
                     }
@@ -381,7 +459,7 @@ class ProcessTextViewModel : ViewModel() {
         currentSearchJob = viewModelScope.launch {
             kotlinx.coroutines.delay(500)
             try {
-                val kinds = listOf(1, 6, 16, 20, 22, 9802)
+                val kinds = listOf(1, 6, 16, 20, 22, 9802, 30023)
                 val existingIds = withContext(Dispatchers.IO) {
                     draftDao.getAllRemoteIds(currentPk)
                 }
@@ -393,7 +471,7 @@ class ProcessTextViewModel : ViewModel() {
                     for (draft in noteChannel) {
                         batch.add(draft)
                         if (batch.size >= 50) {
-                            draftDao.syncRemoteNotes(batch.toList()) // Use intelligent sync instead of destructive insert
+                            draftDao.syncRemoteNotes(batch.toList())
                             batch.clear()
                         }
                     }
@@ -744,6 +822,7 @@ class ProcessTextViewModel : ViewModel() {
                                 }
                                 if (title != null) {
                                     quoteContent = title
+                                    if (postKind == PostKind.ARTICLE) articleTitle = title
                                 }
                             } else {
                                 val content = event.optString("content")
@@ -802,6 +881,10 @@ class ProcessTextViewModel : ViewModel() {
                     previewDescription = meta.description
                     previewImageUrl = meta.imageUrl
                     previewSiteName = meta.siteName
+                    
+                    if (postKind == PostKind.ARTICLE && articleTitle.isBlank()) {
+                        articleTitle = meta.title ?: ""
+                    }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("ProcessTextViewModel", "Error fetching preview: ${e.message}")
@@ -831,7 +914,7 @@ class ProcessTextViewModel : ViewModel() {
             return uploaded.toFloat() / mediaItems.size.toFloat()
         }
     
-    var availableKinds by mutableStateOf(listOf(PostKind.NOTE, PostKind.HIGHLIGHT))
+    var availableKinds by mutableStateOf(listOf(PostKind.NOTE, PostKind.HIGHLIGHT, PostKind.ARTICLE))
     
     enum class SigningPurpose {
         POST,
@@ -897,7 +980,10 @@ class ProcessTextViewModel : ViewModel() {
                 previewImageUrl = previewImageUrl,
                 previewSiteName = previewSiteName,
                 highlightAuthorName = highlightAuthorName,
-                highlightAuthorAvatarUrl = highlightAuthorUrl
+                highlightAuthorAvatarUrl = highlightAuthorUrl,
+                articleTitle = articleTitle,
+                articleSummary = articleSummary,
+                articleIdentifier = articleIdentifier
             )
             val id = draftDao.insertDraft(draft)
             com.ryans.nostrshare.utils.SchedulerUtils.enqueueScheduledWork(
@@ -977,7 +1063,7 @@ class ProcessTextViewModel : ViewModel() {
             mediaItems.add(item)
             
             if (mimeType.startsWith("video/") || mimeType.startsWith("image/")) {
-                availableKinds = listOf(PostKind.MEDIA, PostKind.NOTE)
+                availableKinds = listOf(PostKind.MEDIA, PostKind.NOTE, PostKind.ARTICLE)
                 if (!settingsRepository.isAlwaysUseKind1()) {
                     setKind(PostKind.MEDIA)
                 }
@@ -1090,7 +1176,7 @@ class ProcessTextViewModel : ViewModel() {
                 currentSigningPurpose = SigningPurpose.UPLOAD_AUTH
                 
                 val pkg = signerPackageName
-                if (pk != null && pkg != null) {
+                if (pkg != null) {
                     val signed = com.ryans.nostrshare.nip55.Nip55.signEventBackground(NostrShareApp.getInstance(), pkg, authEventJson, pk)
                     if (signed != null) {
                         onEventSigned(signed)
@@ -1442,7 +1528,8 @@ class ProcessTextViewModel : ViewModel() {
         HIGHLIGHT(9802, "Highlight"),
         REPOST(6, "Repost"),
         MEDIA(0, "Media"),
-        FILE_METADATA(1063, "File Meta")
+        FILE_METADATA(1063, "File Meta"),
+        ARTICLE(30023, "Article")
     }
     
     var postKind by mutableStateOf(PostKind.NOTE)
@@ -1454,7 +1541,7 @@ class ProcessTextViewModel : ViewModel() {
     var isDraftMonitoringActive by mutableStateOf(false)
 
     fun clearContent() {
-        quoteContent = ""
+        contentValue = TextFieldValue("")
         sourceUrl = ""
         mediaUri = null
         mediaMimeType = null
@@ -1464,6 +1551,9 @@ class ProcessTextViewModel : ViewModel() {
         postKind = PostKind.NOTE
         mediaItems.clear()
         mediaTitle = ""
+        articleTitle = ""
+        articleSummary = ""
+        articleIdentifier = null
         
         val draftIdToDelete = currentDraftId
         currentDraftId = null
@@ -1510,7 +1600,10 @@ class ProcessTextViewModel : ViewModel() {
                 previewImageUrl = previewImageUrl,
                 previewSiteName = previewSiteName,
                 highlightAuthorName = highlightAuthorName,
-                highlightAuthorAvatarUrl = highlightAuthorUrl
+                highlightAuthorAvatarUrl = highlightAuthorUrl,
+                articleTitle = articleTitle,
+                articleSummary = articleSummary,
+                articleIdentifier = articleIdentifier
             )
             draftDao.deleteAutoSaveDraft(pubkey)
             draftDao.insertDraft(draft)
@@ -1546,7 +1639,10 @@ class ProcessTextViewModel : ViewModel() {
                 previewImageUrl = previewImageUrl,
                 previewSiteName = previewSiteName,
                 highlightAuthorName = highlightAuthorName,
-                highlightAuthorAvatarUrl = highlightAuthorUrl
+                highlightAuthorAvatarUrl = highlightAuthorUrl,
+                articleTitle = articleTitle,
+                articleSummary = articleSummary,
+                articleIdentifier = articleIdentifier
             )
             val newId = draftDao.insertDraft(draft)
             if (currentDraftId == null) {
@@ -1602,7 +1698,7 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun loadDraft(draft: Draft) {
-        quoteContent = draft.content
+        contentValue = TextFieldValue(draft.content)
         sourceUrl = draft.sourceUrl
         mediaTitle = draft.mediaTitle
         currentDraftId = draft.id
@@ -1613,6 +1709,10 @@ class ProcessTextViewModel : ViewModel() {
         highlightIdentifier = draft.highlightIdentifier
         originalEventJson = draft.originalEventJson
         
+        articleTitle = draft.articleTitle ?: ""
+        articleSummary = draft.articleSummary ?: ""
+        articleIdentifier = draft.articleIdentifier
+
         if (highlightEventId == null && !originalEventJson.isNullOrBlank()) {
             try {
                 val originalEvent = JSONObject(originalEventJson!!)
@@ -1926,6 +2026,30 @@ class ProcessTextViewModel : ViewModel() {
                      event.put("tags", tags)
                  }
              }
+             PostKind.ARTICLE -> {
+                 event.put("kind", 30023)
+                 event.put("content", quoteContent.trim())
+                 
+                 val id = articleIdentifier ?: UUID.randomUUID().toString().take(8)
+                 tags.put(org.json.JSONArray().put("d").put(id))
+                 
+                 if (articleTitle.isNotBlank()) tags.put(org.json.JSONArray().put("title").put(articleTitle))
+                 if (articleSummary.isNotBlank()) tags.put(org.json.JSONArray().put("summary").put(articleSummary))
+                 
+                 // Use first image as cover
+                 mediaItems.firstOrNull { it.uploadedUrl != null && it.mimeType?.startsWith("image/") == true }?.let {
+                     tags.put(org.json.JSONArray().put("image").put(it.uploadedUrl))
+                 }
+                 
+                 tags.put(org.json.JSONArray().put("published_at").put((System.currentTimeMillis() / 1000).toString()))
+                 
+                 // Extract hashtags as topics
+                 "#([a-zA-Z0-9_]+)".toRegex().findAll(quoteContent).forEach { match ->
+                     tags.put(org.json.JSONArray().put("t").put(match.groupValues[1].lowercase()))
+                 }
+                 
+                 event.put("tags", tags)
+             }
         }
         return event.toString()
     }
@@ -2030,7 +2154,10 @@ class ProcessTextViewModel : ViewModel() {
                             isOfflineRetry = true,
                             scheduledAt = System.currentTimeMillis(),
                             signedJson = signedEventsJson.firstOrNull(),
-                            isAutoSave = false
+                            isAutoSave = false,
+                            articleTitle = articleTitle,
+                            articleSummary = articleSummary,
+                            articleIdentifier = articleIdentifier
                         )
                         val id = draftDao.insertDraft(draft)
                         com.ryans.nostrshare.utils.SchedulerUtils.enqueueOfflineRetry(
@@ -2072,7 +2199,10 @@ class ProcessTextViewModel : ViewModel() {
                             isOfflineRetry = true,
                             scheduledAt = System.currentTimeMillis(),
                             signedJson = signedEventsJson.firstOrNull(),
-                            isAutoSave = false
+                            isAutoSave = false,
+                            articleTitle = articleTitle,
+                            articleSummary = articleSummary,
+                            articleIdentifier = articleIdentifier
                         )
                         val id = draftDao.insertDraft(draft)
                         com.ryans.nostrshare.utils.SchedulerUtils.enqueueOfflineRetry(

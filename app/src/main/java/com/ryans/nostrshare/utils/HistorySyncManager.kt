@@ -138,7 +138,7 @@ object HistorySyncManager {
         draftDao: DraftDao,
         since: Long
     ) = coroutineScope {
-        val kinds = listOf(1, 6, 16, 20, 22, 9802)
+        val kinds = listOf(1, 6, 16, 20, 22, 9802, 30023)
         val existingIds = withContext(Dispatchers.IO) {
             draftDao.getAllRemoteIds(syncPubkey).toSet()
         }
@@ -147,8 +147,6 @@ object HistorySyncManager {
             val noteId = note.optString("id")
             val noteAuthor = note.optString("pubkey")
             
-            // CRITICAL: Only process notes authored by the user we are currently syncing
-            // This prevents Account B's sync from hijacking Account A's local notes.
             if (noteAuthor == syncPubkey && !isReply(note) && !existingIds.contains(noteId)) {
                 _discoveryCount.value++
                 val draft = processRemoteNote(note, syncPubkey)
@@ -168,7 +166,7 @@ object HistorySyncManager {
         until: Long? = null
     ) = coroutineScope {
         val noteChannel = Channel<Draft>(capacity = 1000)
-        val kinds = listOf(1, 6, 16, 20, 22, 9802)
+        val kinds = listOf(1, 6, 16, 20, 22, 9802, 30023)
         
         val existingIds = withContext(Dispatchers.IO) {
             draftDao.getAllRemoteIds(syncPubkey).toSet()
@@ -206,7 +204,6 @@ object HistorySyncManager {
                 val noteId = note.optString("id")
                 val noteAuthor = note.optString("pubkey")
                 
-                // CRITICAL: Only process notes authored by the user we are currently syncing
                 if (noteAuthor == syncPubkey && !isReply(note) && !existingIds.contains(noteId)) {
                     _discoveryCount.value++
                     val draft = processRemoteNote(note, syncPubkey)
@@ -280,6 +277,12 @@ object HistorySyncManager {
         var mediaJson = "[]"
         var repostOriginalEventJson: String? = null
         var previewTitle: String? = null
+        var previewImageUrl: String? = null
+        var previewDescription: String? = null
+        
+        var articleTitle: String? = null
+        var articleSummary: String? = null
+        var articleIdentifier: String? = null
         
         var highlightEventId: String? = null
         var highlightAuthor: String? = null
@@ -299,6 +302,10 @@ object HistorySyncManager {
                     "e" -> if (highlightEventId == null) highlightEventId = tagList[1]
                     "p" -> if (highlightAuthor == null) highlightAuthor = tagList[1]
                     "k" -> if (highlightKind == null) highlightKind = tagList[1].toIntOrNull()
+                    "title" -> if (kind == 30023) articleTitle = tagList[1]
+                    "summary" -> if (kind == 30023) articleSummary = tagList[1]
+                    "image" -> if (kind == 30023) previewImageUrl = tagList[1]
+                    "d" -> if (kind == 30023) articleIdentifier = tagList[1]
                 }
             }
         }
@@ -307,7 +314,11 @@ object HistorySyncManager {
         tags.forEach { tag ->
             if (tag.size >= 2) {
                 when (tag[0]) {
-                    "url", "image", "thumb" -> extractedMedia.add(tag[1] to null)
+                    "url", "image", "thumb" -> {
+                        if (kind != 30023 || tag[0] != "image") { // Don't add cover image to gallery list
+                            extractedMedia.add(tag[1] to null)
+                        }
+                    }
                     "imeta" -> {
                         val url = tag.find { it.startsWith("url ") }?.removePrefix("url ")
                         val mime = tag.find { it.startsWith("m ") }?.removePrefix("m ")
@@ -390,7 +401,12 @@ object HistorySyncManager {
             isRemoteCache = true,
             publishedEventId = eventId,
             actualPublishedAt = createdAt,
-            previewTitle = previewTitle
+            previewTitle = previewTitle,
+            previewImageUrl = previewImageUrl,
+            previewDescription = articleSummary ?: previewDescription,
+            articleTitle = articleTitle,
+            articleSummary = articleSummary,
+            articleIdentifier = articleIdentifier
         )
     }
 }
