@@ -105,7 +105,8 @@ object NostrUtils {
         }
     }
 
-    fun getKindLabel(kind: Int, content: String = ""): String {
+    fun getKindLabel(kind: Int, content: String = "", isQuote: Boolean = false): String {
+        if (isQuote) return "Quote"
         return when (kind) {
             1 -> "Text Note"
             9802 -> "Highlight"
@@ -143,8 +144,8 @@ object NostrUtils {
     }
     
     fun normalizeUrl(url: String): String {
-        return url.trim()
-            .lowercase()
+        val cleaned = url.trim().lowercase().substringBefore("#")
+        return cleaned.removePrefix("http://").removePrefix("https://").removePrefix("www.")
             .removeSuffix("/")
             .removeSuffix(".")
             .removeSuffix(",")
@@ -154,7 +155,17 @@ object NostrUtils {
     
     fun urlsMatch(u1: String?, u2: String?): Boolean {
         if (u1 == null || u2 == null) return false
-        return normalizeUrl(u1) == normalizeUrl(u2)
+        val n1 = normalizeUrl(u1).substringBefore("?")
+        val n2 = normalizeUrl(u2).substringBefore("?")
+        
+        // Handle YouTube domain variations
+        val y1 = n1.replace("youtube.com/watch?v=", "").replace("youtu.be/", "").replace("youtube.com/shorts/", "")
+        val y2 = n2.replace("youtube.com/watch?v=", "").replace("youtu.be/", "").replace("youtube.com/shorts/", "")
+        if (n1.contains("yout") && n2.contains("yout")) {
+             return y1 == y2
+        }
+
+        return n1 == n2
     }
 
     private fun parseNprofile(bytes: ByteArray, bech32: String): NostrEntity? {
