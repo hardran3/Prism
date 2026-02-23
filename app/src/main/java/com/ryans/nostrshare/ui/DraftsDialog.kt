@@ -551,9 +551,9 @@ fun IntegratedContent(
             
             if (match == ogMatch || genericUrlMatches.contains(match)) {
                 if (!isHighlight) {
-                    // Kind 1: Hide URL text and render preview card In-line
+                    // Kind 1: Hide URL text and render preview card In-line (with fallback)
                     val meta = if (match == ogMatch) linkMetadata!! else com.ryans.nostrshare.utils.LinkMetadata(url = match.value)
-                    localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(meta))
+                    localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(meta, match.value))
                     lastIndex = match.range.last + 1
                 } else {
                     // Highlight: KEEP URL text visible in the content
@@ -624,14 +624,14 @@ fun IntegratedContent(
         if (isHighlight) {
             // Highlights render previews at the end
             if (ogMatch == null && linkMetadata != null && (linkMetadata.title != null || linkMetadata.imageUrl != null)) {
-                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(linkMetadata))
+                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(linkMetadata, linkMetadata.url))
             } else if (ogMatch == null && sourceUrl?.startsWith("http") == true) {
-                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(com.ryans.nostrshare.utils.LinkMetadata(url = sourceUrl)))
+                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(com.ryans.nostrshare.utils.LinkMetadata(url = sourceUrl), sourceUrl))
             }
         } else {
             // Kind 1: Only add fallback if NO URLs were found in text at all
             if (ogMatch == null && genericUrlMatches.isEmpty() && linkMetadata != null && (linkMetadata.title != null || linkMetadata.imageUrl != null)) {
-                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(linkMetadata))
+                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(linkMetadata, linkMetadata.url))
             }
         }
 
@@ -675,7 +675,7 @@ fun IntegratedContent(
                     }
                 }
                 is com.ryans.nostrshare.ui.ContentSegment.MediaGroup -> { ResponsiveMediaGrid(seg.items, onMediaClick); Spacer(Modifier.height(8.dp)) }
-                is com.ryans.nostrshare.ui.ContentSegment.LinkPreview -> { DynamicLinkPreview(seg.meta.url, seg.meta); Spacer(Modifier.height(8.dp)) }
+                is com.ryans.nostrshare.ui.ContentSegment.LinkPreview -> { DynamicLinkPreview(seg.meta.url, seg.meta, seg.originalText); Spacer(Modifier.height(8.dp)) }
                 is com.ryans.nostrshare.ui.ContentSegment.NostrPreview -> { NostrEventPreview(seg.event, vm, onMediaClick); Spacer(Modifier.height(8.dp)) }
                 is com.ryans.nostrshare.ui.ContentSegment.NostrLink -> { NostrLinkPreview(seg.bech32, vm, onMediaClick); Spacer(Modifier.height(8.dp)) }
             }
@@ -684,7 +684,7 @@ fun IntegratedContent(
 }
 
 @Composable
-fun DynamicLinkPreview(url: String, initialMeta: com.ryans.nostrshare.utils.LinkMetadata? = null) {
+fun DynamicLinkPreview(url: String, initialMeta: com.ryans.nostrshare.utils.LinkMetadata? = null, originalText: String? = null) {
     var meta by remember(url) { mutableStateOf(initialMeta) }
     var isLoading by remember(url) { mutableStateOf(initialMeta == null || (initialMeta.title == null && initialMeta.imageUrl == null)) }
 
@@ -708,6 +708,12 @@ fun DynamicLinkPreview(url: String, initialMeta: com.ryans.nostrshare.utils.Link
         meta?.let { m ->
             if (m.title != null || m.imageUrl != null) {
                 LinkPreviewCard(m)
+            } else if (!originalText.isNullOrBlank()) {
+                Text(originalText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(vertical = 4.dp))
+            }
+        } ?: run {
+            if (!originalText.isNullOrBlank()) {
+                Text(originalText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(vertical = 4.dp))
             }
         }
     }
