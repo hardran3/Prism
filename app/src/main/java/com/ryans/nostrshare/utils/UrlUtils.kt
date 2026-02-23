@@ -1,4 +1,4 @@
-package com.ryans.nostrshare
+package com.ryans.nostrshare.utils
 
 import androidx.core.net.toUri
 

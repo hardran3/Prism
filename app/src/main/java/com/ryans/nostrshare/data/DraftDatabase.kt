@@ -3,7 +3,7 @@ package com.ryans.nostrshare.data
 import android.content.Context
 import androidx.room.*
 
-@Database(entities = [Draft::class], version = 10, exportSchema = false)
+@Database(entities = [Draft::class], version = 11, exportSchema = false)
 abstract class DraftDatabase : RoomDatabase() {
     abstract fun draftDao(): DraftDao
 
@@ -29,6 +29,25 @@ abstract class DraftDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_10_11 = object : androidx.room.migration.Migration(10, 11) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // 1. Remove duplicates before creating unique index to prevent migration failure
+                database.execSQL("""
+                    DELETE FROM drafts 
+                    WHERE publishedEventId IS NOT NULL 
+                    AND id NOT IN (
+                        SELECT MAX(id) 
+                        FROM drafts 
+                        WHERE publishedEventId IS NOT NULL 
+                        GROUP BY publishedEventId
+                    )
+                """.trimIndent())
+                
+                // 2. Create the unique index
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_drafts_publishedEventId ON drafts (publishedEventId)")
+            }
+        }
+
         fun getDatabase(context: Context): DraftDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -36,7 +55,7 @@ abstract class DraftDatabase : RoomDatabase() {
                     DraftDatabase::class.java,
                     "prism_database"
                 )
-                .addMigrations(MIGRATION_8_9, MIGRATION_9_10)
+                .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                 .fallbackToDestructiveMigration(true)
                 .build()
                 INSTANCE = instance

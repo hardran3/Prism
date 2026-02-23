@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.ryans.nostrshare.nip55.*
 import com.ryans.nostrshare.ui.theme.NostrShareTheme
+import com.ryans.nostrshare.utils.UrlUtils
 import com.ryans.nostrshare.ui.DraftsDialog
 import com.ryans.nostrshare.ui.AccountSelectorMenu
 import com.ryans.nostrshare.data.Draft

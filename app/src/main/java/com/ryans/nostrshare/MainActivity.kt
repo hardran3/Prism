@@ -95,8 +95,8 @@ class MainActivity : ComponentActivity() {
                         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
                         var showAccountMenu by remember { mutableStateOf(false) }
 
-                        val draftCount by viewModel.drafts.collectAsState(initial = emptyList())
-                        val scheduledCount by viewModel.allScheduled.collectAsState(initial = emptyList())
+                        val draftCount by viewModel.uiDrafts.collectAsState()
+                        val scheduledCount by viewModel.uiScheduled.collectAsState()
 
                         Scaffold(
                             bottomBar = {

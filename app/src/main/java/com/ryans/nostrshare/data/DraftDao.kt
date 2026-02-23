@@ -17,6 +17,12 @@ interface DraftDao {
     @Query("SELECT * FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey ORDER BY actualPublishedAt DESC")
     fun getRemoteHistory(pubkey: String): Flow<List<Draft>>
 
+    @Query("SELECT publishedEventId FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey AND publishedEventId IS NOT NULL")
+    suspend fun getAllRemoteIds(pubkey: String): List<String>
+
+    @Query("SELECT * FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey ORDER BY actualPublishedAt DESC")
+    suspend fun getRemoteHistoryList(pubkey: String): List<Draft>
+
     @Query("SELECT MAX(actualPublishedAt) FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey")
     suspend fun getMaxRemoteTimestamp(pubkey: String): Long?
 
@@ -43,6 +49,55 @@ interface DraftDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDraft(draft: Draft): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDrafts(drafts: List<Draft>)
+
+    @Transaction
+    suspend fun syncRemoteNotes(remoteNotes: List<Draft>) {
+        for (remote in remoteNotes) {
+            val eventId = remote.publishedEventId ?: continue
+            val existing = getDraftByEventId(eventId)
+            if (existing != null) {
+                // Update remote fields while preserving local flags
+                updateRemoteMetadata(
+                    id = existing.id,
+                    actualPublishedAt = remote.actualPublishedAt ?: existing.actualPublishedAt,
+                    previewTitle = remote.previewTitle ?: existing.previewTitle,
+                    previewDescription = remote.previewDescription ?: existing.previewDescription,
+                    previewImageUrl = remote.previewImageUrl ?: existing.previewImageUrl,
+                    previewSiteName = remote.previewSiteName ?: existing.previewSiteName,
+                    mediaJson = if (existing.mediaJson == "[]" || existing.mediaJson.isBlank()) remote.mediaJson else existing.mediaJson
+                )
+            } else {
+                insertDraft(remote)
+            }
+        }
+    }
+
+    @Query("SELECT * FROM drafts WHERE publishedEventId = :eventId LIMIT 1")
+    suspend fun getDraftByEventId(eventId: String): Draft?
+
+    @Query("""
+        UPDATE drafts SET 
+            actualPublishedAt = :actualPublishedAt,
+            previewTitle = :previewTitle,
+            previewDescription = :previewDescription,
+            previewImageUrl = :previewImageUrl,
+            previewSiteName = :previewSiteName,
+            mediaJson = :mediaJson,
+            isRemoteCache = 1
+        WHERE id = :id
+    """)
+    suspend fun updateRemoteMetadata(
+        id: Int, 
+        actualPublishedAt: Long?, 
+        previewTitle: String?, 
+        previewDescription: String?, 
+        previewImageUrl: String?, 
+        previewSiteName: String?,
+        mediaJson: String
+    )
 
     @Delete
     suspend fun deleteDraft(draft: Draft)

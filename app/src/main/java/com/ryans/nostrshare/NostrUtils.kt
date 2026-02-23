@@ -133,6 +133,13 @@ object NostrUtils {
         
         return SimpleDateFormat(pattern, Locale.getDefault()).format(date)
     }
+
+    // Overloaded function to allow custom date patterns
+    fun formatDate(timestamp: Long, pattern: String): String {
+        val ms = if (timestamp < 30_000_000_000L) timestamp * 1000L else timestamp
+        val date = Date(ms)
+        return SimpleDateFormat(pattern, Locale.getDefault()).format(date)
+    }
     
     fun normalizeUrl(url: String): String {
         return url.trim()

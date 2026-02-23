@@ -25,11 +25,17 @@ import kotlinx.coroutines.withContext
 object NotificationHelper {
 
     const val CHANNEL_ID_SCHEDULE = "prism_scheduler"
+    const val CHANNEL_ID_SYNC = "prism_sync" // New channel for sync
     const val NOTIFICATION_ID_SCHEDULED_STATUS = 1001
+    const val NOTIFICATION_ID_SYNC = 1002 // New ID for sync notification
     const val SUMMARY_ID = 1000
     const val GROUP_KEY_SCHEDULED = "com.ryans.nostrshare.SCHEDULED_NOTES"
 
     fun createNotificationChannel(context: Context) {
+        val notificationManager: NotificationManager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Scheduler Channel
         val name = "Prism Scheduler"
         val descriptionText = "Notifications for pending scheduled posts"
         val importance = NotificationManager.IMPORTANCE_LOW 
@@ -37,9 +43,45 @@ object NotificationHelper {
             description = descriptionText
             setShowBadge(false)
         }
-        val notificationManager: NotificationManager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.createNotificationChannel(channel)
+
+        // Sync Channel
+        val syncName = "Prism Sync"
+        val syncDescription = "Progress of Nostr history synchronization"
+        val syncImportance = NotificationManager.IMPORTANCE_LOW
+        val syncChannel = NotificationChannel(CHANNEL_ID_SYNC, syncName, syncImportance).apply {
+            description = syncDescription
+            setShowBadge(false)
+        }
+        notificationManager.createNotificationChannel(syncChannel)
+    }
+
+    fun showSyncProgressNotification(context: Context, relayUrl: String, current: Int, total: Int, isCompleted: Boolean = false) {
+        val notificationManager = NotificationManagerCompat.from(context)
+        
+        if (isCompleted) {
+            notificationManager.cancel(NOTIFICATION_ID_SYNC)
+            return
+        }
+
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        ) {
+            return
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID_SYNC)
+            .setSmallIcon(R.drawable.ic_notification_prism)
+            .setContentTitle("Syncing History")
+            .setContentText("Relay: $relayUrl")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setSilent(true)
+            .setProgress(total, current, false)
+
+        notificationManager.notify(NOTIFICATION_ID_SYNC, builder.build())
     }
 
     fun updateScheduledNotification(context: Context) {

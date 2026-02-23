@@ -108,6 +108,16 @@ class SettingsRepository(appContext: Context) {
         prefs.edit().putBoolean(key, enabled).apply()
     }
 
+    fun isHistorySyncCompleted(pubkey: String?): Boolean {
+        if (pubkey == null) return false
+        return prefs.getBoolean("${pubkey}_history_sync_completed", false)
+    }
+
+    fun setHistorySyncCompleted(pubkey: String?, completed: Boolean) {
+        if (pubkey == null) return
+        prefs.edit().putBoolean("${pubkey}_history_sync_completed", completed).apply()
+    }
+
     fun getBlossomServers(pubkey: String? = null): List<BlossomServer> {
         val key = if (pubkey != null) "${pubkey}_blossom_servers_json" else "blossom_servers_json"
         

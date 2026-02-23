@@ -1,9 +1,10 @@
-package com.ryans.nostrshare
+package com.ryans.nostrshare.utils
 
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import com.ryans.nostrshare.SettingsRepository
 import java.io.File
 import java.io.FileOutputStream
 

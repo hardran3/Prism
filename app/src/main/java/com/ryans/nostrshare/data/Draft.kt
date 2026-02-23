@@ -2,7 +2,10 @@ package com.ryans.nostrshare.data
 
 import androidx.room.*
 
-@Entity(tableName = "drafts")
+@Entity(
+    tableName = "drafts",
+    indices = [Index(value = ["publishedEventId"], unique = true)]
+)
 data class Draft(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val content: String,

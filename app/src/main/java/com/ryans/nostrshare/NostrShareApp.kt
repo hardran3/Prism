@@ -13,6 +13,8 @@ class NostrShareApp : Application(), ImageLoaderFactory {
         private set
     lateinit var database: com.ryans.nostrshare.data.DraftDatabase
         private set
+    
+    val applicationScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()

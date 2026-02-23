@@ -50,6 +50,7 @@ import androidx.compose.ui.text.input.KeyboardType
 
 class SettingsActivity : ComponentActivity() {
     private val viewModel: SettingsViewModel by viewModels()
+    private val processViewModel: ProcessTextViewModel by viewModels() // Declare processViewModel here
 
     private val signEventLauncher = registerForActivityResult(SignEventContract()) { result ->
         result.onSuccess { signed ->
@@ -95,6 +96,7 @@ class SettingsActivity : ComponentActivity() {
                     SettingsScreen(
                         repo = repo,
                         viewModel = viewModel,
+                        processViewModel = processViewModel, // Pass processViewModel
                         onBack = { finish() },
                         onLogin = {
                             getPublicKeyLauncher.launch(GetPublicKeyContract.Input())
@@ -111,6 +113,7 @@ class SettingsActivity : ComponentActivity() {
 fun SettingsScreen(
     repo: SettingsRepository,
     viewModel: SettingsViewModel,
+    processViewModel: ProcessTextViewModel, // Add to signature
     onBack: () -> Unit,
     onLogin: () -> Unit
 ) {
@@ -161,7 +164,7 @@ fun SettingsScreen(
             
             when (selectedTabIndex) {
                 0 -> GeneralSettingsTab(repo)
-                1 -> NostrSettingsTab(repo, viewModel.pubkey)
+                1 -> NostrSettingsTab(repo, viewModel.pubkey, processViewModel) // Pass processViewModel
                 2 -> BlossomSettingsTab(repo, viewModel, onLogin)
                 3 -> AboutSettingsTab(repo)
             }
@@ -281,7 +284,7 @@ fun GeneralSettingsTab(repo: SettingsRepository) {
 }
 
 @Composable
-fun NostrSettingsTab(repo: SettingsRepository, pubkey: String?) {
+fun NostrSettingsTab(repo: SettingsRepository, pubkey: String?, processViewModel: ProcessTextViewModel) { // Add processViewModel to signature
     var alwaysKind1 by remember { mutableStateOf(repo.isAlwaysUseKind1(pubkey)) }
     var blastrEnabled by remember { mutableStateOf(repo.isBlastrEnabled(pubkey)) }
     var citrineRelayEnabled by remember { mutableStateOf(repo.isCitrineRelayEnabled(pubkey)) }
@@ -359,6 +362,20 @@ fun NostrSettingsTab(repo: SettingsRepository, pubkey: String?) {
                     repo.setCitrineRelayEnabled(it, pubkey)
                 }
             )
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+        
+        val context = androidx.compose.ui.platform.LocalContext.current
+        ElevatedButton(
+            onClick = { 
+                Toast.makeText(context, "Full sync started...", Toast.LENGTH_SHORT).show()
+                processViewModel.forceFullSync()
+            },
+            enabled = !processViewModel.isFetchingRemoteHistory,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Sync History")
         }
     }
 }
