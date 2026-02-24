@@ -31,6 +31,7 @@ import com.ryans.nostrshare.nip55.*
 import com.ryans.nostrshare.ui.DraftsHistoryContent
 import com.ryans.nostrshare.ui.OnboardingScreen
 import com.ryans.nostrshare.ui.AccountSelectorMenu
+import com.ryans.nostrshare.ui.UserAvatar
 import com.ryans.nostrshare.ui.theme.NostrShareTheme
 import androidx.compose.material.icons.filled.PersonAdd
 
@@ -216,23 +217,10 @@ class MainActivity : ComponentActivity() {
                                                     },
                                                     modifier = Modifier.align(Alignment.Center).padding(bottom = 6.dp)
                                                 ) {
-                                                    Box(modifier = Modifier.size(32.dp)) {
-                                                        if (viewModel.userProfile?.pictureUrl != null) {
-                                                            AsyncImage(
-                                                                model = viewModel.userProfile!!.pictureUrl,
-                                                                contentDescription = "User Avatar",
-                                                                modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                                                contentScale = ContentScale.Crop
-                                                            )
-                                                        } else {
-                                                            Icon(
-                                                                imageVector = Icons.Default.Person,
-                                                                contentDescription = "User",
-                                                                modifier = Modifier.fillMaxSize(),
-                                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
-                                                        }
-                                                    }
+                                                    UserAvatar(
+                                                        pictureUrl = viewModel.userProfile?.pictureUrl,
+                                                        size = 32.dp
+                                                    )
                                                 }
 
                                                 Box(modifier = Modifier.align(Alignment.TopEnd).size(1.dp)) {
@@ -282,8 +270,13 @@ class MainActivity : ComponentActivity() {
                                     onSaveToDrafts = { draft ->
                                         viewModel.unscheduleAndSaveToDrafts(draft)
                                     },
-                                    onOpenInClient = { eventId ->
-                                        val noteId = NostrUtils.eventIdToNote(eventId)
+                                    onOpenInClient = { note ->
+                                        val targetId = if (note.kind == 6 || note.kind == 16) {
+                                            NostrUtils.getTargetEventIdFromRepost(note.originalEventJson ?: "") ?: note.id
+                                        } else {
+                                            note.id
+                                        }
+                                        val noteId = NostrUtils.eventIdToNote(targetId)
                                         val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("nostr:$noteId"))
                                         try {
                                             startActivity(intent)

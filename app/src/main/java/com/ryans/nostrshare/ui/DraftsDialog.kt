@@ -32,6 +32,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import coil.compose.AsyncImage
 import com.ryans.nostrshare.ProcessTextViewModel
 import com.ryans.nostrshare.data.Draft
@@ -52,7 +54,7 @@ fun DraftsDialog(
     onDismiss: () -> Unit,
     onEditAndReschedule: (Draft) -> Unit,
     onSaveToDrafts: (Draft) -> Unit,
-    onOpenInClient: (String) -> Unit,
+    onOpenInClient: (HistoryUiModel) -> Unit,
     onRepost: (Draft) -> Unit
 ) {
     androidx.compose.ui.window.Dialog(
@@ -90,7 +92,7 @@ fun DraftsHistoryContent(
     onEditDraft: (Draft) -> Unit,
     onEditAndReschedule: (Draft) -> Unit,
     onSaveToDrafts: (Draft) -> Unit,
-    onOpenInClient: (String) -> Unit,
+    onOpenInClient: (HistoryUiModel) -> Unit,
     onRepost: (Draft) -> Unit
 ) {
     var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab) }
@@ -142,7 +144,7 @@ fun DraftsHistoryList(
     onEditDraft: (Draft) -> Unit,
     onEditAndReschedule: (Draft) -> Unit,
     onSaveToDrafts: (Draft) -> Unit,
-    onOpenInClient: (String) -> Unit,
+    onOpenInClient: (HistoryUiModel) -> Unit,
     onRepost: (Draft) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
@@ -244,7 +246,18 @@ fun DraftsHistoryList(
                             Text("Full History", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                             Switch(checked = vm.isFullHistoryEnabled, onCheckedChange = { vm.toggleFullHistory() }, modifier = Modifier.scale(0.8f))
                         }
-                        OutlinedTextField(value = vm.searchQuery, onValueChange = { vm.searchQuery = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search content...", style = MaterialTheme.typography.bodySmall) }, leadingIcon = { Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp)) }, trailingIcon = if (vm.searchQuery.isNotEmpty()) { { IconButton(onClick = { vm.searchQuery = "" }) { Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp)) } } } else null, singleLine = true, textStyle = MaterialTheme.typography.bodySmall, shape = RoundedCornerShape(8.dp))
+                        OutlinedTextField(
+                            value = vm.searchQuery, 
+                            onValueChange = { vm.searchQuery = it }, 
+                            modifier = Modifier.fillMaxWidth(), 
+                            placeholder = { Text("Search content...", style = MaterialTheme.typography.bodySmall) }, 
+                            leadingIcon = { Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp)) }, 
+                            trailingIcon = if (vm.searchQuery.isNotEmpty()) { { IconButton(onClick = { vm.searchQuery = "" }) { Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp)) } } } else null, 
+                            singleLine = true, 
+                            textStyle = MaterialTheme.typography.bodySmall, 
+                            shape = RoundedCornerShape(8.dp),
+                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
+                        )
                         Spacer(Modifier.height(12.dp))
                         
                         var showPostTypes by remember { mutableStateOf(false) }
@@ -324,7 +337,7 @@ fun UnifiedList(items: List<HistoryUiModel>, isFiltered: Boolean, vm: ProcessTex
 }
 
 @Composable
-fun HistoryList(history: List<HistoryUiModel>, vm: ProcessTextViewModel, isFetching: Boolean, onClearHistory: () -> Unit, onOpenInClient: (String) -> Unit, onMediaClick: (MediaUploadState) -> Unit, onRepost: (HistoryUiModel) -> Unit, onLoadMore: () -> Unit) {
+fun HistoryList(history: List<HistoryUiModel>, vm: ProcessTextViewModel, isFetching: Boolean, onClearHistory: () -> Unit, onOpenInClient: (HistoryUiModel) -> Unit, onMediaClick: (MediaUploadState) -> Unit, onRepost: (HistoryUiModel) -> Unit, onLoadMore: () -> Unit) {
     val listState = remember(vm.pubkey) { LazyListState() }
     val activeSyncPubkey by com.ryans.nostrshare.utils.HistorySyncManager.activePubkey.collectAsState()
     val discoveryCount by com.ryans.nostrshare.utils.HistorySyncManager.discoveryCount.collectAsState()
@@ -366,7 +379,7 @@ fun HistoryList(history: List<HistoryUiModel>, vm: ProcessTextViewModel, isFetch
                     UnifiedPostItem(note = note, vm = vm, onMediaClick = onMediaClick, actions = {
                         if (note.isRemote && note.isSuccess) {
                             TextButton(onClick = { onRepost(note) }) { Icon(Icons.Default.Schedule, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Repost") }
-                            TextButton(onClick = { onOpenInClient(note.id) }) { Icon(Icons.Default.Link, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Open") }
+                            TextButton(onClick = { onOpenInClient(note) }) { Icon(Icons.Default.Link, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Open") }
                         }
                     })
                 }

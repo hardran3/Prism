@@ -13,6 +13,8 @@ class NostrShareApp : Application(), ImageLoaderFactory {
         private set
     lateinit var database: com.ryans.nostrshare.data.DraftDatabase
         private set
+    lateinit var avatarImageLoader: ImageLoader
+        private set
     
     val applicationScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
 
@@ -23,6 +25,24 @@ class NostrShareApp : Application(), ImageLoaderFactory {
             .build()
         database = com.ryans.nostrshare.data.DraftDatabase.getDatabase(this)
         com.ryans.nostrshare.utils.NotificationHelper.createNotificationChannel(this)
+
+        avatarImageLoader = ImageLoader.Builder(this)
+            .components {
+                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    add(ImageDecoderDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
+            }
+            .okHttpClient(client)
+            .diskCache {
+                coil.disk.DiskCache.Builder()
+                    .directory(cacheDir.resolve("avatar_cache"))
+                    .maxSizeBytes(20L * 1024 * 1024) // 20MB dedicated for avatars
+                    .build()
+            }
+            .crossfade(true)
+            .build()
     }
 
     override fun newImageLoader(): ImageLoader {

@@ -18,6 +18,7 @@ import com.ryans.nostrshare.ui.theme.NostrShareTheme
 import com.ryans.nostrshare.utils.UrlUtils
 import com.ryans.nostrshare.ui.DraftsDialog
 import com.ryans.nostrshare.ui.AccountSelectorMenu
+import com.ryans.nostrshare.ui.UserAvatar
 import com.ryans.nostrshare.data.Draft
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Popup
@@ -43,6 +44,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.foundation.text.KeyboardOptions
 import android.net.Uri
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.withStyle
@@ -278,11 +281,10 @@ class ProcessTextActivity : ComponentActivity() {
                         navigationIcon = {
                             Box {
                                 IconButton(modifier = Modifier.padding(start = 8.dp).size(48.dp), onClick = { showAccountMenu = !showAccountMenu }) {
-                                    if (vm.userProfile?.pictureUrl != null) {
-                                        AsyncImage(model = vm.userProfile!!.pictureUrl, contentDescription = null, modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
-                                    } else {
-                                        Icon(Icons.Default.Person, null, modifier = Modifier.fillMaxSize().padding(8.dp))
-                                    }
+                                    UserAvatar(
+                                        pictureUrl = vm.userProfile?.pictureUrl,
+                                        size = 48.dp
+                                    )
                                 }
                                 AccountSelectorMenu(expanded = showAccountMenu, onDismiss = { showAccountMenu = false }, vm = vm, onAddAccount = { showAccountMenu = false; getPublicKeyLauncher.launch(GetPublicKeyContract.Input(permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(30023), Permission.signEvent(20), Permission.signEvent(22)))) }, onSwitchAccount = { pk -> showAccountMenu = false; vm.switchUser(pk) })
                             }
@@ -401,6 +403,7 @@ class ProcessTextActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxWidth(),
                             placeholder = { Text("Article Title", style = MaterialTheme.typography.headlineMedium) },
                             textStyle = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Transparent, unfocusedBorderColor = Color.Transparent)
                         )
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -408,12 +411,12 @@ class ProcessTextActivity : ComponentActivity() {
 
                     if (!isFullscreenMode) {
                         if (vm.postKind == ProcessTextViewModel.PostKind.ARTICLE) {
-                            OutlinedTextField(value = vm.articleTitle, onValueChange = { vm.articleTitle = it }, label = { Text("Article Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, textStyle = MaterialTheme.typography.titleMedium)
+                            OutlinedTextField(value = vm.articleTitle, onValueChange = { vm.articleTitle = it }, label = { Text("Article Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, textStyle = MaterialTheme.typography.titleMedium, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
                             Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(value = vm.articleSummary, onValueChange = { vm.articleSummary = it }, label = { Text("Article Summary (Optional)") }, modifier = Modifier.fillMaxWidth(), maxLines = 2, textStyle = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(value = vm.articleSummary, onValueChange = { vm.articleSummary = it }, label = { Text("Article Summary (Optional)") }, modifier = Modifier.fillMaxWidth(), maxLines = 2, textStyle = MaterialTheme.typography.bodySmall, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
                             Spacer(Modifier.height(8.dp))
                         } else if (vm.postKind == ProcessTextViewModel.PostKind.MEDIA) {
-                            OutlinedTextField(value = vm.mediaTitle, onValueChange = { vm.mediaTitle = it }, label = { Text("Media Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            OutlinedTextField(value = vm.mediaTitle, onValueChange = { vm.mediaTitle = it }, label = { Text("Media Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
                             Spacer(Modifier.height(8.dp))
                         }
                         Text(text = if (vm.postKind == ProcessTextViewModel.PostKind.ARTICLE) "Body (Markdown)" else "Content", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
@@ -454,6 +457,7 @@ class ProcessTextActivity : ComponentActivity() {
                         visualTransformation = remember(vm.usernameCache.size, highlightColor, vm.isVisualMode, h1Style, h2Style, h3Style) {
                             MarkdownVisualTransformation(vm.usernameCache, highlightColor, codeColor, quoteColor, linkColor, nostrColor, h1Style, h2Style, h3Style, stripDelimiters = vm.isVisualMode)
                         },
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         shape = if (isFullscreenMode) RoundedCornerShape(0.dp) else OutlinedTextFieldDefaults.shape,
                         colors = if (isFullscreenMode) OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Transparent, unfocusedBorderColor = Color.Transparent) else OutlinedTextFieldDefaults.colors()
                     )
@@ -478,7 +482,15 @@ class ProcessTextActivity : ComponentActivity() {
                     if (vm.showSharingDialog) SharingDialog(vm = vm, onDismiss = { vm.showSharingDialog = false })
                     if (showDatePicker) { val ds = rememberDatePickerState(initialSelectedDateMillis = System.currentTimeMillis()); DatePickerDialog(onDismissRequest = { showDatePicker = false }, confirmButton = { TextButton(onClick = { showDatePicker = false; showTimePicker = true; tempDateMillis = ds.selectedDateMillis }) { Text("Next") } }) { DatePicker(state = ds) } }
                     if (showTimePicker) { val ts = rememberTimePickerState(); AlertDialog(onDismissRequest = { showTimePicker = false }, confirmButton = { TextButton(onClick = { val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { timeInMillis = tempDateMillis ?: System.currentTimeMillis() }; val cal = java.util.Calendar.getInstance().apply { set(utc.get(java.util.Calendar.YEAR), utc.get(java.util.Calendar.MONTH), utc.get(java.util.Calendar.DAY_OF_MONTH), ts.hour, ts.minute, 0) }; if (cal.timeInMillis <= System.currentTimeMillis()) Toast.makeText(this@ProcessTextActivity, "Pick future time", Toast.LENGTH_SHORT).show() else checkExactAlarmAndSchedule(cal.timeInMillis); showTimePicker = false }) { Text("Schedule") } }, title = { Text("Select Time") }, text = { TimePicker(state = ts) }) }
-                    if (vm.showDraftsHistory) DraftsDialog(vm = vm, onDismiss = { vm.showDraftsHistory = false }, onEditAndReschedule = { d -> vm.showDraftsHistory = false; vm.loadDraftById(d.id) }, onSaveToDrafts = {}, onOpenInClient = { u -> try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) } catch (_: Exception) {} }, onRepost = { d -> vm.showDraftsHistory = false; vm.quoteContent = ""; vm.sourceUrl = d.sourceUrl; vm.setKind(ProcessTextViewModel.PostKind.REPOST); vm.originalEventJson = d.originalEventJson; vm.highlightEventId = d.highlightEventId; vm.highlightAuthor = d.highlightAuthor; vm.highlightKind = d.highlightKind; vm.highlightIdentifier = d.highlightIdentifier; showDatePicker = true })
+                    if (vm.showDraftsHistory) DraftsDialog(vm = vm, onDismiss = { vm.showDraftsHistory = false }, onEditAndReschedule = { d -> vm.showDraftsHistory = false; vm.loadDraftById(d.id) }, onSaveToDrafts = {}, onOpenInClient = { note ->
+                        val targetId = if (note.kind == 6 || note.kind == 16) {
+                            NostrUtils.getTargetEventIdFromRepost(note.originalEventJson ?: "") ?: note.id
+                        } else {
+                            note.id
+                        }
+                        val noteId = NostrUtils.eventIdToNote(targetId)
+                        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("nostr:$noteId"))) } catch (_: Exception) {}
+                    }, onRepost = { d -> vm.showDraftsHistory = false; vm.quoteContent = ""; vm.sourceUrl = d.sourceUrl; vm.setKind(ProcessTextViewModel.PostKind.REPOST); vm.originalEventJson = d.originalEventJson; vm.highlightEventId = d.highlightEventId; vm.highlightAuthor = d.highlightAuthor; vm.highlightKind = d.highlightKind; vm.highlightIdentifier = d.highlightIdentifier; showDatePicker = true })
                 }
 
                 if (vm.showLinkDialog) {
@@ -649,7 +661,8 @@ class ProcessTextActivity : ComponentActivity() {
                         onValueChange = { vm.linkDialogText = it },
                         label = { Text("Text") },
                         modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
-                        singleLine = true
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
@@ -925,5 +938,5 @@ fun SharingDialog(vm: ProcessTextViewModel, onDismiss: () -> Unit) {
 
 @Composable
 fun UserSearchDialog(vm: ProcessTextViewModel, onDismiss: () -> Unit, onUserSelected: (String) -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Add User") }, text = { Column { OutlinedTextField(value = vm.userSearchQuery, onValueChange = { vm.performUserSearch(it) }, label = { Text("Search by name or npub") }, modifier = Modifier.fillMaxWidth(), singleLine = true); Spacer(Modifier.height(16.dp)); if (vm.isSearchingUsers) LinearProgressIndicator(Modifier.fillMaxWidth()); androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) { items(vm.userSearchResults.size) { i -> val (pk, p) = vm.userSearchResults[i]; Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { onUserSelected(pk) }, verticalAlignment = Alignment.CenterVertically) { if (p.pictureUrl != null) AsyncImage(model = p.pictureUrl, contentDescription = null, modifier = Modifier.size(40.dp).clip(CircleShape), contentScale = ContentScale.Crop) else Icon(Icons.Default.Person, null, modifier = Modifier.size(40.dp)); Spacer(Modifier.width(12.dp)); Column { Row(verticalAlignment = Alignment.CenterVertically) { Text(p.name ?: pk.take(8), fontWeight = FontWeight.Bold); if (vm.followedPubkeys.contains(pk)) { Spacer(Modifier.width(4.dp)); Icon(Icons.Default.Check, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) } }; Text(try { NostrUtils.pubkeyToNpub(pk) } catch (_: Exception) { pk.take(16) + "..." }, style = MaterialTheme.typography.labelSmall) } } } } } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Add User") }, text = { Column { OutlinedTextField(value = vm.userSearchQuery, onValueChange = { vm.performUserSearch(it) }, label = { Text("Search by name or npub") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)); Spacer(Modifier.height(16.dp)); if (vm.isSearchingUsers) LinearProgressIndicator(Modifier.fillMaxWidth()); androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) { items(vm.userSearchResults.size) { i -> val (pk, p) = vm.userSearchResults[i]; Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { onUserSelected(pk) }, verticalAlignment = Alignment.CenterVertically) { UserAvatar(pictureUrl = p.pictureUrl, size = 40.dp); Spacer(Modifier.width(12.dp)); Column { Row(verticalAlignment = Alignment.CenterVertically) { Text(p.name ?: pk.take(8), fontWeight = FontWeight.Bold); if (vm.followedPubkeys.contains(pk)) { Spacer(Modifier.width(4.dp)); Icon(Icons.Default.Check, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) } }; Text(try { NostrUtils.pubkeyToNpub(pk) } catch (_: Exception) { pk.take(16) + "..." }, style = MaterialTheme.typography.labelSmall) } } } } } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
 }

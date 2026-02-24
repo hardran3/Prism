@@ -152,6 +152,26 @@ object NostrUtils {
             .removeSuffix(")")
             .removeSuffix("!")
     }
+
+    fun getTargetEventIdFromRepost(json: String): String? {
+        if (json.isBlank()) return null
+        return try {
+            val obj = org.json.JSONObject(json)
+            val tags = obj.optJSONArray("tags")
+            if (tags != null) {
+                for (i in 0 until tags.length()) {
+                    val tag = tags.optJSONArray(i)
+                    if (tag != null && tag.length() >= 2 && tag.optString(0) == "e") {
+                        return tag.optString(1)
+                    }
+                }
+            }
+            // Fallback: If it's an embedded event, use its ID
+            obj.optString("id").takeIf { it.isNotEmpty() }
+        } catch (_: Exception) {
+            null
+        }
+    }
     
     fun urlsMatch(u1: String?, u2: String?): Boolean {
         if (u1 == null || u2 == null) return false

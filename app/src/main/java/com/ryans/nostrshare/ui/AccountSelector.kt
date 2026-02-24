@@ -47,16 +47,10 @@ fun AccountSelectorMenu(
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (account.pictureUrl != null) {
-                                            AsyncImage(
-                                                model = account.pictureUrl,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(32.dp).clip(CircleShape),
-                                                contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                            )
-                                        } else {
-                                            Icon(Icons.Default.Person, null, modifier = Modifier.size(32.dp))
-                                        }
+                                        UserAvatar(
+                                            pictureUrl = account.pictureUrl,
+                                            size = 32.dp
+                                        )
                                         Spacer(Modifier.width(12.dp))
                                         Text(
                                             text = account.name ?: (account.npub?.take(12) ?: account.pubkey.take(8)),
@@ -87,16 +81,10 @@ fun AccountSelectorMenu(
                 DropdownMenuItem(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (account.pictureUrl != null) {
-                                AsyncImage(
-                                    model = account.pictureUrl,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(32.dp).clip(CircleShape),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                )
-                            } else {
-                                Icon(Icons.Default.Person, null, modifier = Modifier.size(32.dp))
-                            }
+                            UserAvatar(
+                                pictureUrl = account.pictureUrl,
+                                size = 32.dp
+                            )
                             Spacer(Modifier.width(12.dp))
                             Text(
                                 text = account.name ?: (account.npub?.take(12) ?: account.pubkey.take(8)),

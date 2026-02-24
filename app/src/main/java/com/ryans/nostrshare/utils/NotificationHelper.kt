@@ -148,7 +148,7 @@ object NotificationHelper {
                             // Load Avatar Bitmap asynchronously
                             val avatarBitmap = profile?.pictureUrl?.let { url ->
                                 try {
-                                    val loader = ImageLoader(context)
+                                    val loader = com.ryans.nostrshare.NostrShareApp.getInstance().avatarImageLoader
                                     val request = ImageRequest.Builder(context)
                                         .data(url)
                                         .allowHardware(false) // Required for getting bitmap
