@@ -308,9 +308,18 @@ object HistorySyncManager {
                     "e" -> if (highlightEventId == null) highlightEventId = tagList[1]
                     "p" -> if (highlightAuthor == null) highlightAuthor = tagList[1]
                     "k" -> if (highlightKind == null) highlightKind = tagList[1].toIntOrNull()
-                    "title" -> if (kind == 30023) articleTitle = tagList[1]
-                    "summary" -> if (kind == 30023) articleSummary = tagList[1]
-                    "image" -> if (kind == 30023) previewImageUrl = tagList[1]
+                    "title" -> {
+                        if (kind == 30023) articleTitle = tagList[1]
+                        if (previewTitle == null) previewTitle = tagList[1]
+                    }
+                    "summary" -> {
+                        if (kind == 30023) articleSummary = tagList[1]
+                        if (previewDescription == null) previewDescription = tagList[1]
+                    }
+                    "image", "thumb" -> {
+                        if (kind == 30023) previewImageUrl = tagList[1]
+                        if (previewImageUrl == null) previewImageUrl = tagList[1]
+                    }
                     "d" -> if (kind == 30023) articleIdentifier = tagList[1]
                 }
             }
@@ -365,10 +374,7 @@ object HistorySyncManager {
                 if (sourceUrl.isBlank()) {
                     sourceUrl = tags.find { it.size >= 2 && (it[0] == "r" || it[0] == "u" || (it[0].length == 1 && it[1].startsWith("http"))) }?.get(1) ?: ""
                 }
-                highlightEventId = eventId
-                highlightAuthor = json.optString("pubkey")
-                highlightKind = 1
-                // Cache the JSON for potential quotes
+                // Only preserve the JSON for potentially structured quotes later
                 repostOriginalEventJson = json.toString()
             }
             6, 16 -> {

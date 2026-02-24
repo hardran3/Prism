@@ -30,6 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.KeyboardOptions
@@ -400,6 +402,7 @@ fun HistoryList(history: List<HistoryUiModel>, vm: ProcessTextViewModel, isFetch
 fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick: (MediaUploadState) -> Unit, actions: @Composable () -> Unit) {
     val date = remember(note.timestamp) { NostrUtils.formatDate(note.timestamp) }
     val profile = note.pubkey?.let { vm.usernameCache[it] }
+    var isExpanded by remember { mutableStateOf(false) }
     
     LaunchedEffect(note.pubkey) {
         note.pubkey?.let { if (vm.usernameCache[it]?.name == null) vm.resolveUsername(it) }
@@ -423,8 +426,7 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
         Column(modifier = Modifier.padding(12.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                 Box(modifier = Modifier.size(40.dp).padding(top = 4.dp)) {
-                    if (profile?.pictureUrl != null) AsyncImage(model = profile.pictureUrl, contentDescription = null, modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
-                    else Icon(Icons.Default.Person, null, modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant, CircleShape).padding(8.dp))
+                    UserAvatar(pictureUrl = profile?.pictureUrl, size = 40.dp)
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -445,44 +447,97 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                     Text(profile?.name ?: note.pubkey?.take(8) ?: "Draft", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(8.dp))
                     
-                    if (note.kind == 30023) {
-                        if (note.previewImageUrl != null) {
-                            AsyncImage(model = note.previewImageUrl, contentDescription = null, modifier = Modifier.fillMaxWidth().aspectRatio(16f/9f).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentScale = ContentScale.Crop)
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        Text(note.articleTitle ?: "Untitled", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
-                        if (!note.articleSummary.isNullOrBlank()) {
-                            Text(note.articleSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        } else {
-                            Text(note.contentSnippet, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        }
-                    } else {
-                        val contentToRender = remember(note.kind, note.contentSnippet) { 
-                            if (note.kind == 6 || note.kind == 16) "" else note.contentSnippet 
+                    val density = androidx.compose.ui.platform.LocalDensity.current
+                    var trueContentHeightPx by remember { mutableIntStateOf(0) }
+                    val trueContentHeightDp = with(density) { trueContentHeightPx.toDp() }
+                    
+                    // Stabilize truncation state: once it's true, it stays true unless the content fundamentally changes
+                    val isTruncated = remember(trueContentHeightPx) { trueContentHeightDp > 360.dp }
+
+                    Box(modifier = Modifier.fillMaxWidth().heightIn(max = if (isExpanded || !isTruncated) androidx.compose.ui.unit.Dp.Unspecified else 300.dp)) {
+                        // Use onSizeChanged for better stability, and only measure when NOT clamped if possible
+                        Column(modifier = Modifier.onSizeChanged { size -> 
+                            // Only update if the measured height is larger than our current "true" height
+                            // or if we are expanded (meaning we are seeing the full size)
+                            if (isExpanded || size.height > trueContentHeightPx || !isTruncated) {
+                                trueContentHeightPx = size.height
+                            }
+                        }) {
+                            if (note.kind == 30023) {
+                                if (note.previewImageUrl != null) {
+                                    AsyncImage(model = note.previewImageUrl, contentDescription = null, modifier = Modifier.fillMaxWidth().aspectRatio(16f/9f).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentScale = ContentScale.Crop)
+                                    Spacer(Modifier.height(8.dp))
+                                }
+                                Text(note.articleTitle ?: "Untitled", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
+                                if (!note.articleSummary.isNullOrBlank()) {
+                                    Text(note.articleSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                } else {
+                                    Text(note.contentSnippet, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                }
+                            } else {
+                                val contentToRender = remember(note.kind, note.contentSnippet) { 
+                                    if (note.kind == 6 || note.kind == 16) "" else note.contentSnippet 
+                                }
+                                
+                                var linkMeta: com.ryans.nostrshare.utils.LinkMetadata? = null
+                                if (!note.previewTitle.isNullOrBlank() || !note.previewImageUrl.isNullOrBlank()) {
+                                    linkMeta = com.ryans.nostrshare.utils.LinkMetadata(url = note.sourceUrl ?: "", title = note.previewTitle, description = note.previewDescription, imageUrl = note.previewImageUrl, siteName = note.previewSiteName)
+                                }
+                                
+                                IntegratedContent(
+                                    content = contentToRender, 
+                                    vm = vm, 
+                                    onMediaClick = onMediaClick, 
+                                    mediaItems = parseMediaJson(note.mediaJson), 
+                                    linkMetadata = linkMeta, 
+                                    nostrEvent = note.nostrEvent, 
+                                    targetLink = note.targetLink,
+                                    isHighlight = note.kind == 9802,
+                                    sourceUrl = note.sourceUrl,
+                                    kind = note.kind
+                                )
+                            }
                         }
                         
-                        var linkMeta: com.ryans.nostrshare.utils.LinkMetadata? = null
-                        if (!note.previewTitle.isNullOrBlank() || !note.previewImageUrl.isNullOrBlank()) {
-                            linkMeta = com.ryans.nostrshare.utils.LinkMetadata(url = note.sourceUrl ?: "", title = note.previewTitle, description = note.previewDescription, imageUrl = note.previewImageUrl, siteName = note.previewSiteName)
+                        // Fading edge overlay when collapsed AND truncated
+                        if (!isExpanded && isTruncated) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(40.dp)
+                                    .align(Alignment.BottomCenter)
+                                    .background(
+                                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                                            colors = listOf(Color.Transparent, containerColor)
+                                        )
+                                    )
+                            )
                         }
-                        
-                        IntegratedContent(
-                            content = contentToRender, 
-                            vm = vm, 
-                            onMediaClick = onMediaClick, 
-                            mediaItems = parseMediaJson(note.mediaJson), 
-                            linkMetadata = linkMeta, 
-                            nostrEvent = note.nostrEvent, 
-                            targetLink = note.targetLink,
-                            isHighlight = note.kind == 9802,
-                            sourceUrl = note.sourceUrl,
-                            kind = note.kind
-                        )
                     }
-                    if (note.isCompleted && note.publishError != null) Text("Error: ${note.publishError}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+
+                    if (isTruncated || isExpanded) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { isExpanded = !isExpanded },
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                            ) {
+                                Text(if (isExpanded) "Show Less" else "Show More", style = MaterialTheme.typography.labelSmall)
+                            }
+                            
+                            if (note.isCompleted && note.publishError != null) {
+                                Text("Error: ${note.publishError}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    } else if (note.isCompleted && note.publishError != null) {
+                        Text("Error: ${note.publishError}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
+                    }
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) { actions() }
+            Row(Modifier.fillMaxWidth().padding(top = 0.dp), horizontalArrangement = Arrangement.End) { actions() }
         }
     }
 }
@@ -510,7 +565,8 @@ fun IntegratedContent(
     targetLink: String? = null, // New parameter from model
     isHighlight: Boolean = false,
     sourceUrl: String? = null,
-    kind: Int = 1 // New parameter
+    kind: Int = 1, // New parameter
+    isNested: Boolean = false // New parameter for compact rendering
 ) {
     val segments = remember(content, mediaItems, linkMetadata, nostrEvent, targetLink, vm.usernameCache.size, sourceUrl) {
         val urlRegex = "(https?://[^\\s]+)".toRegex(RegexOption.IGNORE_CASE)
@@ -554,10 +610,14 @@ fun IntegratedContent(
                           listOfNotNull(ogMatch) + listOfNotNull(nostrMatch) + eventLinkMatches).distinctBy { it.range }.sortedBy { it.range.first }
 
         var i = 0
+        var nostrTargetAddedInline = false
         while (i < allMatches.size) {
             val match = allMatches[i]
             if (match.range.first > lastIndex) {
-                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.Text(content.substring(lastIndex, match.range.first)))
+                val text = content.substring(lastIndex, match.range.first)
+                if (text.trim().isNotBlank()) {
+                    localSegments.add(com.ryans.nostrshare.ui.ContentSegment.Text(text.trim()))
+                }
             }
             
             if (match == ogMatch || genericUrlMatches.contains(match)) {
@@ -572,14 +632,14 @@ fun IntegratedContent(
                     lastIndex = match.range.last + 1
                 }
                 i++
-            } else if (match == nostrMatch) {
-                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrPreview(nostrEvent!!))
-                lastIndex = match.range.last + 1
-                i++
-            } else if (eventLinkMatches.any { it.range == match.range }) {
-                val bech32 = if (match.value.startsWith("nostr:")) match.value.substring(6) else match.value
-                // Render as a full preview even if it's just a link in text
-                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrLink(bech32))
+            } else if (match == nostrMatch || eventLinkMatches.any { it.range == match.range }) {
+                // Kind 1/6/16: Hide Nostr link in text and render at the end
+                // Kind 30023: Render inline
+                if (kind == 30023) {
+                    val bech32 = if (match.value.startsWith("nostr:")) match.value.substring(6) else match.value
+                    localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrLink(bech32))
+                    nostrTargetAddedInline = true
+                }
                 lastIndex = match.range.last + 1
                 i++
             } else {
@@ -625,7 +685,7 @@ fun IntegratedContent(
                     localSegments.add(com.ryans.nostrshare.ui.ContentSegment.MediaGroup(groupedItems))
                     usedMediaUrls.addAll(group.map { it.lowercase() })
                 } else {
-                    localSegments.add(com.ryans.nostrshare.ui.ContentSegment.Text(group.joinToString(" ")))
+                    localSegments.add(com.ryans.nostrshare.ui.ContentSegment.Text(group.joinToString(" ").trim()))
                 }
                 i = nextI
                 lastIndex = currentEnd
@@ -633,7 +693,10 @@ fun IntegratedContent(
         }
         
         if (lastIndex < content.length) {
-            localSegments.add(com.ryans.nostrshare.ui.ContentSegment.Text(content.substring(lastIndex)))
+            val text = content.substring(lastIndex)
+            if (text.trim().isNotBlank()) {
+                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.Text(text.trim()))
+            }
         }
         
         val leftoverMedia = mediaItems.filter { item ->
@@ -658,7 +721,7 @@ fun IntegratedContent(
         }
 
         // CRITICAL: Explicit Target Rendering for Reposts or Quotes missing from text
-        if (nostrMatch == null) {
+        if (!nostrTargetAddedInline) {
             if (nostrEvent != null) {
                 localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrPreview(nostrEvent))
             } else if (targetLink != null) {
@@ -676,44 +739,61 @@ fun IntegratedContent(
     }
     
     Column(Modifier.fillMaxWidth()) {
-        segments.forEach { seg ->
-            when (seg) {
-                is com.ryans.nostrshare.ui.ContentSegment.Text -> {
-                    if (seg.text.trim().isNotBlank()) {
-                        val highlightColor = MaterialTheme.colorScheme.primary
-                        val codeColor = MaterialTheme.colorScheme.secondary
-                        val h1Style = MaterialTheme.typography.headlineLarge
-                        val h2Style = MaterialTheme.typography.headlineMedium
-                        val h3Style = MaterialTheme.typography.headlineSmall
-                        
-                        val styledText = remember(seg.text, vm.usernameCache.size) {
-                            com.ryans.nostrshare.utils.MarkdownUtils.renderMarkdown(
-                                text = seg.text,
-                                usernameCache = vm.usernameCache,
-                                highlightColor = highlightColor,
-                                codeColor = codeColor,
-                                h1Style = h1Style,
-                                h2Style = h2Style,
-                                h3Style = h3Style,
-                                stripDelimiters = true
-                            )
-                        }
-                        
-                        if (isHighlight) {
-                            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(vertical = 4.dp)) {
-                                Box(Modifier.width(2.dp).fillMaxHeight().background(LocalContentColor.current, RoundedCornerShape(1.dp)))
-                                Spacer(Modifier.width(12.dp))
-                                Text(styledText, style = MaterialTheme.typography.bodyLarge)
+        if (isNested && kind == 30023) {
+            // Compact Article View for reposts/quotes
+            val title = nostrEvent?.optJSONArray("tags")?.let { tags ->
+                (0 until tags.length()).mapNotNull { tags.optJSONArray(it) }.find { it.optString(0) == "title" }?.optString(1)
+            } ?: "Untitled Article"
+            val summary = nostrEvent?.optJSONArray("tags")?.let { tags ->
+                (0 until tags.length()).mapNotNull { tags.optJSONArray(it) }.find { it.optString(0) == "summary" }?.optString(1)
+            } ?: content.take(150)
+            
+            Column(Modifier.padding(vertical = 4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (summary.isNotBlank()) {
+                    Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        } else {
+            segments.forEach { seg ->
+                when (seg) {
+                    is com.ryans.nostrshare.ui.ContentSegment.Text -> {
+                        if (seg.text.trim().isNotBlank()) {
+                            val highlightColor = MaterialTheme.colorScheme.primary
+                            val codeColor = MaterialTheme.colorScheme.secondary
+                            val h1Style = MaterialTheme.typography.headlineLarge
+                            val h2Style = MaterialTheme.typography.headlineMedium
+                            val h3Style = MaterialTheme.typography.headlineSmall
+                            
+                            val styledText = remember(seg.text, vm.usernameCache.size) {
+                                com.ryans.nostrshare.utils.MarkdownUtils.renderMarkdown(
+                                    text = seg.text,
+                                    usernameCache = vm.usernameCache,
+                                    highlightColor = highlightColor,
+                                    codeColor = codeColor,
+                                    h1Style = h1Style,
+                                    h2Style = h2Style,
+                                    h3Style = h3Style,
+                                    stripDelimiters = true
+                                )
                             }
-                        } else {
-                            Text(styledText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 4.dp))
+                            
+                            if (isHighlight) {
+                                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(vertical = 4.dp)) {
+                                    Box(Modifier.width(2.dp).fillMaxHeight().background(LocalContentColor.current, RoundedCornerShape(1.dp)))
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(styledText, style = MaterialTheme.typography.bodyLarge)
+                                }
+                            } else {
+                                Text(styledText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 4.dp))
+                            }
                         }
                     }
+                    is com.ryans.nostrshare.ui.ContentSegment.MediaGroup -> { ResponsiveMediaGrid(seg.items, onMediaClick); Spacer(Modifier.height(8.dp)) }
+                    is com.ryans.nostrshare.ui.ContentSegment.LinkPreview -> { DynamicLinkPreview(seg.meta.url, seg.meta, seg.originalText); Spacer(Modifier.height(8.dp)) }
+                    is com.ryans.nostrshare.ui.ContentSegment.NostrPreview -> { NostrEventPreview(seg.event, vm, onMediaClick); Spacer(Modifier.height(8.dp)) }
+                    is com.ryans.nostrshare.ui.ContentSegment.NostrLink -> { NostrLinkPreview(seg.bech32, vm, onMediaClick); Spacer(Modifier.height(8.dp)) }
                 }
-                is com.ryans.nostrshare.ui.ContentSegment.MediaGroup -> { ResponsiveMediaGrid(seg.items, onMediaClick); Spacer(Modifier.height(8.dp)) }
-                is com.ryans.nostrshare.ui.ContentSegment.LinkPreview -> { DynamicLinkPreview(seg.meta.url, seg.meta, seg.originalText); Spacer(Modifier.height(8.dp)) }
-                is com.ryans.nostrshare.ui.ContentSegment.NostrPreview -> { NostrEventPreview(seg.event, vm, onMediaClick); Spacer(Modifier.height(8.dp)) }
-                is com.ryans.nostrshare.ui.ContentSegment.NostrLink -> { NostrLinkPreview(seg.bech32, vm, onMediaClick); Spacer(Modifier.height(8.dp)) }
             }
         }
     }
@@ -791,68 +871,53 @@ fun NostrLinkPreview(bech32: String, vm: ProcessTextViewModel, onMediaClick: (Me
 fun NostrEventPreview(event: JSONObject, vm: ProcessTextViewModel, onMediaClick: (MediaUploadState) -> Unit) {
     val pubkey = remember(event) { event.optString("pubkey") }
     val content = remember(event) { event.optString("content") }
+    val kind = remember(event) { event.optInt("kind", 1) }
     val profile = vm.usernameCache[pubkey]
-    
-    var linkMetadata by remember(event) { mutableStateOf<LinkMetadata?>(null) }
     
     LaunchedEffect(pubkey) {
         if (vm.usernameCache[pubkey]?.name == null) vm.resolveUsername(pubkey)
     }
 
-    LaunchedEffect(content) {
-        val urlRegex = "https?://[^\\s]+".toRegex()
-        urlRegex.find(content)?.value?.let { url ->
-            linkMetadata = LinkPreviewManager.fetchMetadata(url)
-        }
-    }
-
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.1f)), shape = RoundedCornerShape(8.dp), border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))) {
-        Row(Modifier.padding(8.dp)) {
-            if (profile?.pictureUrl != null) AsyncImage(model = profile.pictureUrl, contentDescription = null, modifier = Modifier.size(24.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-            else Icon(Icons.Default.Person, null, Modifier.size(24.dp).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape).padding(4.dp))
-            Spacer(Modifier.width(8.dp))
-            Column {
-                Text(text = profile?.name ?: pubkey.take(8), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                
-                val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
-                val filteredContent = remember(content) { content.replace(mediaUrlPattern, "").trim() }
-                
-                if (filteredContent.isNotBlank()) {
-                    Text(text = filteredContent, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), 
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.1f)), 
+        shape = RoundedCornerShape(8.dp), 
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                UserAvatar(pictureUrl = profile?.pictureUrl, size = 24.dp)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(text = profile?.name ?: pubkey.take(8), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 }
-
-                // Inline Link Preview
-                linkMetadata?.let { meta ->
-                    if (meta.title != null || meta.imageUrl != null) {
-                        Spacer(Modifier.height(4.dp))
-                        LinkPreviewCard(meta)
-                    }
-                }
-                
-                // Media Gallery
-                val mediaMatches = remember(content) { mediaUrlPattern.findAll(content).map { it.value }.toList() }
-                if (mediaMatches.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    val previewItems = remember(mediaMatches) {
-                        mediaMatches.take(3).map { url ->
-                            val lc = url.lowercase().substringBefore("?")
-                            val detectedMime = when {
-                                lc.endsWith(".mp4") || lc.endsWith(".mov") || lc.endsWith(".webm") || lc.endsWith(".avi") || lc.endsWith(".mkv") -> "video/mp4"
-                                lc.endsWith(".gif") -> "image/gif"
-                                lc.endsWith(".png") -> "image/png"
-                                lc.endsWith(".webp") -> "image/webp"
-                                lc.endsWith(".svg") -> "image/svg+xml"
-                                lc.endsWith(".jpg") || lc.endsWith(".jpeg") || lc.endsWith(".bmp") -> "image/jpeg"
-                                else -> null
-                            }
-                            MediaUploadState(id = UUID.randomUUID().toString(), uri = Uri.parse(url), mimeType = detectedMime).apply { uploadedUrl = url }
-                        }
-                    }
-                    ResponsiveMediaGrid(mediaItems = previewItems, onMediaClick = onMediaClick)
-                }
+                Text(NostrUtils.getKindLabel(kind), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
             }
+            Spacer(Modifier.height(8.dp))
+            
+            // Recursive use of IntegratedContent ensures media/links in quotes work consistently
+            IntegratedContent(
+                content = content,
+                vm = vm,
+                onMediaClick = onMediaClick,
+                mediaItems = parseMediaJsonFromTags(event.optJSONArray("tags")),
+                kind = kind
+            )
         }
     }
+}
+
+fun parseMediaJsonFromTags(tags: JSONArray?): List<MediaUploadState> {
+    if (tags == null) return emptyList()
+    val items = mutableListOf<MediaUploadState>()
+    for (i in 0 until tags.length()) {
+        val tag = tags.optJSONArray(i) ?: continue
+        if (tag.length() >= 2 && (tag.getString(0) == "url" || tag.getString(0) == "image" || tag.getString(0) == "thumb")) {
+            val url = tag.getString(1)
+            items.add(MediaUploadState(id = UUID.randomUUID().toString(), uri = Uri.parse(url)).apply { uploadedUrl = url })
+        }
+    }
+    return items
 }
 
 @Composable

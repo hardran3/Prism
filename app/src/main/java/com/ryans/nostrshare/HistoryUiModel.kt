@@ -73,6 +73,18 @@ fun Draft.toUiModel(isRemote: Boolean): HistoryUiModel {
             targetJson = originalEventJson?.let { try { JSONObject(it) } catch (_: Exception) { null } }
         }
     }
+
+    // CRITICAL: Prevent self-previewing
+    val selfId = publishedEventId
+    if (selfId != null) {
+        if (targetJson?.optString("id") == selfId) {
+            targetJson = null
+        }
+        val entity = detectedLink?.let { com.ryans.nostrshare.NostrUtils.findNostrEntity(it) }
+        if (entity?.id == selfId) {
+            detectedLink = null
+        }
+    }
     
     return HistoryUiModel(
         id = if (isRemote) (publishedEventId ?: id.toString()) else "local_$id",

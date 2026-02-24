@@ -44,8 +44,27 @@ data class Draft(
     val articleIdentifier: String? = null
 ) {
     @Ignore var isRemote: Boolean = false
-    val isQuote: Boolean get() = kind == 1 && 
-        (highlightEventId != null || !originalEventJson.isNullOrBlank() || com.ryans.nostrshare.NostrUtils.hasQuoteLink(content) || com.ryans.nostrshare.NostrUtils.hasQuoteLink(sourceUrl))
+    val isQuote: Boolean get() {
+        if (kind != 1) return false
+        
+        // Explicitly set metadata for a quote
+        if (highlightEventId != null) return true
+        
+        // Check if originalEventJson is a quote target (different ID) or just a local cache (same ID)
+        if (!originalEventJson.isNullOrBlank()) {
+            try {
+                val json = org.json.JSONObject(originalEventJson)
+                val jsonId = json.optString("id")
+                if (jsonId.isNotBlank() && jsonId != publishedEventId) {
+                    return true
+                }
+            } catch (_: Exception) {}
+        }
+        
+        // Fallback to scanning content/source for links
+        return com.ryans.nostrshare.NostrUtils.hasQuoteLink(content) || 
+               com.ryans.nostrshare.NostrUtils.hasQuoteLink(sourceUrl)
+    }
 
     fun getEffectivePostKind(): PostKind {
         return when {
