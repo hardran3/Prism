@@ -62,9 +62,9 @@ object MarkdownUtils {
                         color = codeColor
                     )) { builder.append(line) }
                 }
-                line.startsWith("#") -> {
+                line.startsWith("#") && line.getOrNull(line.takeWhile { it == '#' }.length) == ' ' -> {
                     val level = line.takeWhile { it == '#' }.length
-                    val prefixLen = if (line.length > level && line[level] == ' ') level + 1 else level
+                    val prefixLen = level + 1 // Always level + 1 because we confirmed ' ' exists at 'level' index
                     val style = when(level) {
                         1 -> h1Style
                         2 -> h2Style

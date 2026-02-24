@@ -167,6 +167,42 @@ class ProcessTextViewModel : ViewModel() {
         )
     }
 
+    fun applyStrikethrough() {
+        val selection = contentValue.selection
+        val text = contentValue.text
+        if (selection.collapsed) return
+
+        val selStart = selection.min.coerceIn(0, text.length)
+        val selEnd = selection.max.coerceIn(selStart, text.length)
+
+        val selectedText = text.substring(selStart, selEnd)
+        val styledText = UnicodeStylizer.toggleStrikethrough(selectedText)
+
+        val newText = text.replaceRange(selStart, selEnd, styledText)
+        contentValue = contentValue.copy(
+            text = newText,
+            selection = TextRange(selStart, selStart + styledText.length)
+        )
+    }
+
+    fun applyUnderline() {
+        val selection = contentValue.selection
+        val text = contentValue.text
+        if (selection.collapsed) return
+
+        val selStart = selection.min.coerceIn(0, text.length)
+        val selEnd = selection.max.coerceIn(selStart, text.length)
+
+        val selectedText = text.substring(selStart, selEnd)
+        val styledText = UnicodeStylizer.toggleUnderline(selectedText)
+
+        val newText = text.replaceRange(selStart, selEnd, styledText)
+        contentValue = contentValue.copy(
+            text = newText,
+            selection = TextRange(selStart, selStart + styledText.length)
+        )
+    }
+
     fun applyInlineMarkdown(symbol: String) {
         val selection = contentValue.selection
         val text = contentValue.text
@@ -225,7 +261,11 @@ class ProcessTextViewModel : ViewModel() {
         
         contentValue = contentValue.copy(
             text = newText,
-            selection = TextRange(lineStart, lineStart + newBlock.length)
+            selection = if (selection.collapsed) {
+                TextRange(lineStart + newBlock.length)
+            } else {
+                TextRange(lineStart, lineStart + newBlock.length)
+            }
         )
     }
 
@@ -262,32 +302,47 @@ class ProcessTextViewModel : ViewModel() {
         }
     }
 
-    fun applyLinkMarkdown(clipboardUrl: String?) {
+    var showLinkDialog by mutableStateOf(false)
+    var linkDialogText by mutableStateOf("")
+    var linkDialogUrl by mutableStateOf("")
+
+    fun openLinkDialog(clipboardUrl: String?) {
         val selection = contentValue.selection
         val text = contentValue.text
-        val url = if (clipboardUrl?.startsWith("http") == true) clipboardUrl else "url"
         val selStart = selection.min.coerceIn(0, text.length)
         val selEnd = selection.max.coerceIn(selStart, text.length)
         
-        if (selection.collapsed) {
-            val link = "[title]($url)"
-            val newText = text.substring(0, selStart) + link + text.substring(selEnd)
-            contentValue = contentValue.copy(
-                text = newText,
-                selection = TextRange(selStart + 1, selStart + 6)
-            )
-        } else {
-            val selectedText = text.substring(selStart, selEnd)
-            val newText = text.substring(0, selStart) + "[$selectedText]($url)" + text.substring(selEnd)
-            contentValue = contentValue.copy(
-                text = newText,
-                selection = if (url == "url") {
-                    TextRange(selStart + selectedText.length + 3, selStart + selectedText.length + 6)
-                } else {
-                    TextRange(selStart, selStart + selectedText.length + url.length + 4)
-                }
-            )
-        }
+        linkDialogText = if (!selection.collapsed) text.substring(selStart, selEnd) else ""
+        linkDialogUrl = if (clipboardUrl?.startsWith("http") == true) clipboardUrl else ""
+        showLinkDialog = true
+    }
+
+    fun openLinkDialogForEdit(text: String, url: String) {
+        linkDialogText = text
+        linkDialogUrl = url
+        showLinkDialog = true
+    }
+
+    fun applyLink(text: String, url: String) {
+        val selection = contentValue.selection
+        val currentText = contentValue.text
+        val selStart = selection.min.coerceIn(0, currentText.length)
+        val selEnd = selection.max.coerceIn(selStart, currentText.length)
+
+        val finalLinkText = text.ifBlank { "text" }
+        val finalLinkUrl = url.ifBlank { "url" }
+        val linkMarkdown = "[$finalLinkText]($finalLinkUrl)"
+        val newText = currentText.replaceRange(selStart, selEnd, linkMarkdown)
+        
+        contentValue = contentValue.copy(
+            text = newText,
+            selection = TextRange(selStart, selStart + linkMarkdown.length)
+        )
+        showLinkDialog = false
+    }
+
+    fun applyLinkMarkdown(clipboardUrl: String?) {
+        // Deprecated by Link Dialog
     }
 
     // --- Optimized Data Flows ---
