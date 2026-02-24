@@ -61,10 +61,9 @@ abstract class DraftDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     DraftDatabase::class.java,
-                    "prism_database"
+                    "prism_database.db"
                 )
                 .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
-                .fallbackToDestructiveMigration(true)
                 .build()
                 INSTANCE = instance
                 instance

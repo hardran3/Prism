@@ -646,39 +646,36 @@ class ProcessTextViewModel : ViewModel() {
     var uploadedMediaSize by mutableStateOf<Long?>(null)
 
     init {
-        val onboardedFromRepo = settingsRepository.isOnboarded()
-        isOnboarded = onboardedFromRepo
+        isOnboarded = settingsRepository.isOnboarded()
         isSchedulingEnabled = settingsRepository.isSchedulingEnabled()
-        val savedPubkey = prefs.getString("pubkey", null)
-        isFullHistoryEnabled = settingsRepository.isFullHistoryEnabled(savedPubkey)
-        hasReachedEndOfRemoteHistory = settingsRepository.isHistorySyncCompleted(savedPubkey)
+        
+        if (isOnboarded) {
+            val savedPubkey = prefs.getString("pubkey", null)
+            isFullHistoryEnabled = settingsRepository.isFullHistoryEnabled(savedPubkey)
+            hasReachedEndOfRemoteHistory = settingsRepository.isHistorySyncCompleted(savedPubkey)
 
-        if (savedPubkey != null) {
-            pubkey = savedPubkey
-            npub = prefs.getString("npub", null)
-            signerPackageName = prefs.getString("signer_package", null)
-            
-            val savedName = prefs.getString("user_name", null)
-            val savedPic = prefs.getString("user_pic", null)
-            val savedTime = prefs.getLong("user_created_at", 0L)
-            if (savedName != null || savedPic != null) {
-                userProfile = UserProfile(savedName, savedPic, createdAt = savedTime)
-            }
-            
-            if (isOnboarded) {
+            if (savedPubkey != null) {
+                pubkey = savedPubkey
+                npub = prefs.getString("npub", null)
+                signerPackageName = prefs.getString("signer_package", null)
+                
+                val savedName = prefs.getString("user_name", null)
+                val savedPic = prefs.getString("user_pic", null)
+                val savedTime = prefs.getLong("user_created_at", 0L)
+                if (savedName != null || savedPic != null) {
+                    userProfile = UserProfile(savedName, savedPic, createdAt = savedTime)
+                }
+                
                 refreshUserProfile()
             }
-        }
-
-        knownAccounts.addAll(settingsRepository.getKnownAccounts())
-        
-        blossomServers = settingsRepository.getBlossomServers(pubkey)
-        
-        if (!isOnboarded) {
+        } else {
             currentOnboardingStep = OnboardingStep.WELCOME
         }
 
+        knownAccounts.addAll(settingsRepository.getKnownAccounts())
+        blossomServers = settingsRepository.getBlossomServers(pubkey)
         followedPubkeys = settingsRepository.getFollowedPubkeys()
+        
         settingsRepository.getUsernameCache().forEach { (pk, profile) ->
             usernameCache[pk] = profile
         }
@@ -760,6 +757,7 @@ class ProcessTextViewModel : ViewModel() {
     
 
     private fun refreshUserProfile() {
+        if (!isOnboarded && currentOnboardingStep != OnboardingStep.SYNCING) return
         val pk = pubkey ?: return
         viewModelScope.launch {
             try {
@@ -803,7 +801,7 @@ class ProcessTextViewModel : ViewModel() {
                     settingsRepository.setUsernameCache(usernameCache.toMap())
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("ProcessTextViewModel", "Failed to refresh user profile", e)
             } finally {
                 fetchRemoteHistory()
             }
@@ -848,6 +846,7 @@ class ProcessTextViewModel : ViewModel() {
     fun completeOnboarding() {
         settingsRepository.setOnboarded(true)
         isOnboarded = true
+        refreshUserProfile()
     }
 
     fun startSchedulingOnboarding() {
