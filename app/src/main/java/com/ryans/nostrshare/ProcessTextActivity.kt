@@ -14,6 +14,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.ryans.nostrshare.nip55.*
+import com.ryans.nostrshare.nip55.PostKind
 import com.ryans.nostrshare.ui.theme.NostrShareTheme
 import com.ryans.nostrshare.utils.UrlUtils
 import com.ryans.nostrshare.ui.DraftsDialog
@@ -294,7 +295,7 @@ class ProcessTextActivity : ComponentActivity() {
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { showModeMenu = true }.padding(8.dp)) {
                                 Column {
                                     Text(vm.postKind.label, style = MaterialTheme.typography.titleMedium)
-                                    if (vm.postKind == ProcessTextViewModel.PostKind.MEDIA) Text("Media Upload", style = MaterialTheme.typography.labelSmall)
+                                    if (vm.postKind == PostKind.MEDIA) Text("Media Upload", style = MaterialTheme.typography.labelSmall)
                                 }
                                 Icon(Icons.Default.ArrowDropDown, null)
                                 DropdownMenu(expanded = showModeMenu, onDismissRequest = { showModeMenu = false }, properties = PopupProperties(focusable = false)) {
@@ -396,7 +397,7 @@ class ProcessTextActivity : ComponentActivity() {
                     .displayCutoutPadding()
                     .padding(if (isFullscreenMode) 8.dp else 16.dp)
                     .fillMaxSize()) {
-                    if (isFullscreenMode && vm.postKind == ProcessTextViewModel.PostKind.ARTICLE) {
+                    if (isFullscreenMode && vm.postKind == PostKind.ARTICLE) {
                         OutlinedTextField(
                             value = vm.articleTitle,
                             onValueChange = { vm.articleTitle = it },
@@ -410,18 +411,17 @@ class ProcessTextActivity : ComponentActivity() {
                     }
 
                     if (!isFullscreenMode) {
-                        if (vm.postKind == ProcessTextViewModel.PostKind.ARTICLE) {
+                        if (vm.postKind == PostKind.ARTICLE) {
                             OutlinedTextField(value = vm.articleTitle, onValueChange = { vm.articleTitle = it }, label = { Text("Article Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, textStyle = MaterialTheme.typography.titleMedium, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
                             Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(value = vm.articleSummary, onValueChange = { vm.articleSummary = it }, label = { Text("Article Summary (Optional)") }, modifier = Modifier.fillMaxWidth(), maxLines = 2, textStyle = MaterialTheme.typography.bodySmall, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
-                            Spacer(Modifier.height(8.dp))
-                        } else if (vm.postKind == ProcessTextViewModel.PostKind.MEDIA) {
-                            OutlinedTextField(value = vm.mediaTitle, onValueChange = { vm.mediaTitle = it }, label = { Text("Media Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        Text(text = if (vm.postKind == ProcessTextViewModel.PostKind.ARTICLE) "Body (Markdown)" else "Content", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                    }
-
+                                                    OutlinedTextField(value = vm.articleSummary, onValueChange = { vm.articleSummary = it }, label = { Text("Article Summary (Optional)") }, modifier = Modifier.fillMaxWidth(), maxLines = 2, textStyle = MaterialTheme.typography.bodySmall, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
+                                                    Spacer(Modifier.height(8.dp))
+                                                } else if (vm.postKind == PostKind.MEDIA) {
+                                                    OutlinedTextField(value = vm.mediaTitle, onValueChange = { vm.mediaTitle = it }, label = { Text("Media Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
+                                                    Spacer(Modifier.height(8.dp))
+                                                }
+                                                Text(text = if (vm.postKind == PostKind.ARTICLE) "Body (Markdown)" else "Content", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                            }
                     val highlightColor = MaterialTheme.colorScheme.primary
                     val codeColor = MaterialTheme.colorScheme.secondary
                     val quoteColor = MaterialTheme.colorScheme.tertiary
@@ -465,7 +465,7 @@ class ProcessTextActivity : ComponentActivity() {
                     MarkdownToolbar(vm, isFullscreenMode, onToggleFullscreen = { isFullscreenMode = !isFullscreenMode })
 
                     if (!isFullscreenMode) {
-                        if (vm.postKind != ProcessTextViewModel.PostKind.NOTE && vm.postKind != ProcessTextViewModel.PostKind.ARTICLE) {
+                        if (vm.postKind != PostKind.NOTE && vm.postKind != PostKind.ARTICLE) {
                             OutlinedTextField(value = vm.sourceUrl, onValueChange = { vm.updateSource(it) }, label = { Text("Source URL / Event") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), singleLine = true)
                         }
                         if (vm.mediaItems.isNotEmpty()) {
@@ -490,7 +490,7 @@ class ProcessTextActivity : ComponentActivity() {
                         }
                         val noteId = NostrUtils.eventIdToNote(targetId)
                         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("nostr:$noteId"))) } catch (_: Exception) {}
-                    }, onRepost = { d -> vm.showDraftsHistory = false; vm.quoteContent = ""; vm.sourceUrl = d.sourceUrl; vm.setKind(ProcessTextViewModel.PostKind.REPOST); vm.originalEventJson = d.originalEventJson; vm.highlightEventId = d.highlightEventId; vm.highlightAuthor = d.highlightAuthor; vm.highlightKind = d.highlightKind; vm.highlightIdentifier = d.highlightIdentifier; showDatePicker = true })
+                    }, onRepost = { d -> vm.showDraftsHistory = false; vm.quoteContent = ""; vm.sourceUrl = d.sourceUrl; vm.setKind(PostKind.REPOST); vm.originalEventJson = d.originalEventJson; vm.highlightEventId = d.highlightEventId; vm.highlightAuthor = d.highlightAuthor; vm.highlightKind = d.highlightKind; vm.highlightIdentifier = d.highlightIdentifier; showDatePicker = true })
                 }
 
                 if (vm.showLinkDialog) {

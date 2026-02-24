@@ -111,6 +111,16 @@ data class DecryptResult(
     val id: String?
 )
 
+enum class PostKind(val kind: Int, val label: String) {
+    NOTE(1, "Note"), 
+    QUOTE(1, "Quote"), // Custom internal type for Kind 1 with q tags
+    HIGHLIGHT(9802, "Highlight"),
+    REPOST(6, "Repost"),
+    MEDIA(0, "Media"),
+    FILE_METADATA(1063, "File Meta"),
+    ARTICLE(30023, "Article")
+}
+
 internal object Nip55Protocol {
     const val URI_SCHEME = "nostrsigner"
 

@@ -38,6 +38,7 @@ import coil.compose.AsyncImage
 import com.ryans.nostrshare.ProcessTextViewModel
 import com.ryans.nostrshare.data.Draft
 import com.ryans.nostrshare.NostrUtils
+import com.ryans.nostrshare.toUiModel
 import com.ryans.nostrshare.MediaUploadState
 import com.ryans.nostrshare.MediaDetailDialog
 import com.ryans.nostrshare.HistoryUiModel
@@ -456,13 +457,6 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                             Text(note.contentSnippet, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         }
                     } else {
-                        val nostrEvent = remember(note.id, note.originalEventJson, note.contentSnippet) {
-                            if (note.kind == 6 || note.kind == 16) {
-                                try { JSONObject(note.contentSnippet) } catch (e: Exception) {
-                                    note.originalEventJson?.let { try { JSONObject(it) } catch (_: Exception) { null } }
-                                }
-                            } else null
-                        }
                         val contentToRender = remember(note.kind, note.contentSnippet) { 
                             if (note.kind == 6 || note.kind == 16) "" else note.contentSnippet 
                         }
@@ -478,9 +472,11 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                             onMediaClick = onMediaClick, 
                             mediaItems = parseMediaJson(note.mediaJson), 
                             linkMetadata = linkMeta, 
-                            nostrEvent = nostrEvent, 
+                            nostrEvent = note.nostrEvent, 
+                            targetLink = note.targetLink,
                             isHighlight = note.kind == 9802,
-                            sourceUrl = note.sourceUrl
+                            sourceUrl = note.sourceUrl,
+                            kind = note.kind
                         )
                     }
                     if (note.isCompleted && note.publishError != null) Text("Error: ${note.publishError}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -511,10 +507,12 @@ fun IntegratedContent(
     mediaItems: List<MediaUploadState>, 
     linkMetadata: com.ryans.nostrshare.utils.LinkMetadata? = null, 
     nostrEvent: JSONObject? = null,
+    targetLink: String? = null, // New parameter from model
     isHighlight: Boolean = false,
-    sourceUrl: String? = null
+    sourceUrl: String? = null,
+    kind: Int = 1 // New parameter
 ) {
-    val segments = remember(content, mediaItems, linkMetadata, nostrEvent, vm.usernameCache.size, sourceUrl) {
+    val segments = remember(content, mediaItems, linkMetadata, nostrEvent, targetLink, vm.usernameCache.size, sourceUrl) {
         val urlRegex = "(https?://[^\\s]+)".toRegex(RegexOption.IGNORE_CASE)
         val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
         val nostrRegex = "(nostr:)?(nevent1|note1|naddr1|npub1|nprofile1)[a-z0-9]+".toRegex(RegexOption.IGNORE_CASE)
@@ -580,6 +578,7 @@ fun IntegratedContent(
                 i++
             } else if (eventLinkMatches.any { it.range == match.range }) {
                 val bech32 = if (match.value.startsWith("nostr:")) match.value.substring(6) else match.value
+                // Render as a full preview even if it's just a link in text
                 localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrLink(bech32))
                 lastIndex = match.range.last + 1
                 i++
@@ -658,13 +657,18 @@ fun IntegratedContent(
             }
         }
 
-        if (nostrMatch == null && nostrEvent != null) {
-            localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrPreview(nostrEvent))
-        } else if (nostrMatch == null && sourceUrl != null && isHighlight) {
-            val bech32 = if (sourceUrl.startsWith("nostr:")) sourceUrl.substring(6) else sourceUrl
-            val entity = try { NostrUtils.findNostrEntity(bech32) } catch(_: Exception) { null }
-            if (entity != null && (entity.type == "nevent" || entity.type == "note" || entity.type == "naddr")) {
-                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrLink(entity.bech32))
+        // CRITICAL: Explicit Target Rendering for Reposts or Quotes missing from text
+        if (nostrMatch == null) {
+            if (nostrEvent != null) {
+                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrPreview(nostrEvent))
+            } else if (targetLink != null) {
+                localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrLink(targetLink))
+            } else if (sourceUrl != null && isHighlight) {
+                val bech32 = if (sourceUrl.startsWith("nostr:")) sourceUrl.substring(6) else sourceUrl
+                val entity = try { NostrUtils.findNostrEntity(bech32) } catch(_: Exception) { null }
+                if (entity != null && (entity.type == "nevent" || entity.type == "note" || entity.type == "naddr")) {
+                    localSegments.add(com.ryans.nostrshare.ui.ContentSegment.NostrLink(entity.bech32))
+                }
             }
         }
         
@@ -890,32 +894,3 @@ fun MediaGridItem(item: MediaUploadState, modifier: Modifier, onMediaClick: (Med
     }
 }
 
-fun Draft.toUiModel(isRemote: Boolean): HistoryUiModel {
-    return HistoryUiModel(
-        id = if (isRemote) (publishedEventId ?: id.toString()) else "local_$id",
-        localId = id,
-        contentSnippet = content,
-        timestamp = if (isRemote) (actualPublishedAt ?: lastEdited) else (scheduledAt ?: lastEdited),
-        pubkey = pubkey,
-        isRemote = isRemote,
-        isScheduled = isScheduled,
-        isCompleted = isCompleted,
-        isSuccess = isCompleted && publishError == null,
-        isOfflineRetry = isOfflineRetry,
-        publishError = publishError,
-        kind = kind,
-        isQuote = isQuote,
-        actualPublishedAt = actualPublishedAt,
-        scheduledAt = scheduledAt,
-        sourceUrl = sourceUrl,
-        previewTitle = previewTitle,
-        previewImageUrl = previewImageUrl,
-        previewDescription = previewDescription,
-        previewSiteName = previewSiteName,
-        mediaJson = mediaJson,
-        originalEventJson = originalEventJson,
-        articleTitle = articleTitle,
-        articleSummary = articleSummary,
-        articleIdentifier = articleIdentifier
-    )
-}

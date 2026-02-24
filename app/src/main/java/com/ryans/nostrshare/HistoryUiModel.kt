@@ -1,6 +1,9 @@
 package com.ryans.nostrshare
 
+import com.ryans.nostrshare.data.Draft
+import com.ryans.nostrshare.nip55.PostKind
 import com.ryans.nostrshare.ui.ContentSegment
+import org.json.JSONObject
 
 // Lightweight UI model to prevent OOM and lag
 data class HistoryUiModel(
@@ -29,5 +32,75 @@ data class HistoryUiModel(
     val articleTitle: String? = null,
     val articleSummary: String? = null,
     val articleIdentifier: String? = null,
+    val nostrEvent: JSONObject? = null,
+    val targetLink: String? = null,
     val segments: List<ContentSegment> = emptyList()
 )
+
+fun Draft.toUiModel(isRemote: Boolean): HistoryUiModel {
+    val effectiveKind = getEffectivePostKind()
+    
+    // Proactive Target Detection
+    var targetJson: JSONObject? = null
+    var detectedLink: String? = null
+
+    when (effectiveKind) {
+        PostKind.REPOST -> {
+            // Priority 1: originalEventJson
+            targetJson = originalEventJson?.let { try { JSONObject(it) } catch (_: Exception) { null } }
+            
+            // Priority 2: Parse content if it's JSON (Remote reposts often store target here)
+            if (targetJson == null && content.trim().startsWith("{")) {
+                targetJson = try { JSONObject(content) } catch (_: Exception) { null }
+            }
+            
+            // Priority 3: sourceUrl pointer
+            if (sourceUrl.isNotBlank()) {
+                detectedLink = sourceUrl.removePrefix("nostr:")
+            }
+        }
+        PostKind.QUOTE -> {
+            // Scan for the first nostr: link to use as the specific quote target
+            val regex = "(nostr:)?(nevent1|note1|naddr1)[a-z0-9]+".toRegex(RegexOption.IGNORE_CASE)
+            val match = regex.find(content) ?: sourceUrl.let { regex.find(it) }
+            detectedLink = match?.value?.removePrefix("nostr:")
+            
+            // Still check originalEventJson for a cache of the quoted note
+            targetJson = originalEventJson?.let { try { JSONObject(it) } catch (_: Exception) { null } }
+        }
+        else -> {
+            // Standard fallback for other types
+            targetJson = originalEventJson?.let { try { JSONObject(it) } catch (_: Exception) { null } }
+        }
+    }
+    
+    return HistoryUiModel(
+        id = if (isRemote) (publishedEventId ?: id.toString()) else "local_$id",
+        localId = id,
+        contentSnippet = content,
+        timestamp = if (isRemote) (actualPublishedAt ?: lastEdited) else (scheduledAt ?: lastEdited),
+        pubkey = pubkey,
+        isRemote = isRemote,
+        isScheduled = isScheduled,
+        isCompleted = isCompleted,
+        isSuccess = isCompleted && publishError == null,
+        isOfflineRetry = isOfflineRetry,
+        publishError = publishError,
+        kind = kind,
+        isQuote = isQuote,
+        actualPublishedAt = actualPublishedAt,
+        scheduledAt = scheduledAt,
+        sourceUrl = sourceUrl,
+        previewTitle = previewTitle,
+        previewImageUrl = previewImageUrl,
+        previewDescription = previewDescription,
+        previewSiteName = previewSiteName,
+        mediaJson = mediaJson,
+        originalEventJson = originalEventJson,
+        articleTitle = articleTitle,
+        articleSummary = articleSummary,
+        articleIdentifier = articleIdentifier,
+        nostrEvent = targetJson,
+        targetLink = detectedLink
+    )
+}

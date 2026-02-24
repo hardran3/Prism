@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import com.ryans.nostrshare.data.Draft
+import com.ryans.nostrshare.nip55.PostKind
 import com.ryans.nostrshare.utils.HistorySyncManager
 import com.ryans.nostrshare.utils.UnicodeStylizer
 
@@ -380,38 +381,15 @@ class ProcessTextViewModel : ViewModel() {
             if (isEnabled) draftDao.getRemoteHistory(pk) else flowOf(emptyList())
         ) { scheduled, remote ->
             withContext(Dispatchers.Default) {
-                (scheduled + remote.onEach { it.isRemote = true })
-                    .distinctBy { it.publishedEventId ?: "local_${it.id}" }
-                    .sortedByDescending { it.actualPublishedAt ?: it.scheduledAt ?: it.lastEdited }
-                    .map { draft ->
-                        HistoryUiModel(
-                            id = draft.publishedEventId ?: "local_${draft.id}",
-                            localId = draft.id,
-                            contentSnippet = if (draft.content.length > 500) draft.content.take(500) + "..." else draft.content,
-                            timestamp = draft.actualPublishedAt ?: draft.scheduledAt ?: draft.lastEdited,
-                            pubkey = draft.pubkey,
-                            isRemote = draft.isRemoteCache && !draft.isScheduled,
-                            isScheduled = draft.isScheduled,
-                            isCompleted = draft.isCompleted,
-                            isSuccess = draft.isCompleted && draft.publishError == null,
-                            isOfflineRetry = draft.isOfflineRetry,
-                            publishError = draft.publishError,
-                            kind = draft.kind,
-                            isQuote = draft.isQuote,
-                            actualPublishedAt = draft.actualPublishedAt,
-                            scheduledAt = draft.scheduledAt,
-                            sourceUrl = draft.sourceUrl,
-                            previewTitle = draft.previewTitle,
-                            previewImageUrl = draft.previewImageUrl,
-                            previewDescription = draft.previewDescription,
-                            previewSiteName = draft.previewSiteName,
-                            mediaJson = draft.mediaJson,
-                            originalEventJson = draft.originalEventJson,
-                            articleTitle = draft.articleTitle,
-                            articleSummary = draft.articleSummary,
-                            articleIdentifier = draft.articleIdentifier
-                        )
-                    }
+                val scheduledModels = scheduled.map { it.toUiModel(isRemote = false) }
+                val remoteModels = remote.map { 
+                    it.isRemote = true
+                    it.toUiModel(isRemote = true) 
+                }
+                
+                (scheduledModels + remoteModels)
+                    .distinctBy { it.id }
+                    .sortedByDescending { it.timestamp }
             }
         }
     }.conflate()
@@ -1637,14 +1615,6 @@ class ProcessTextViewModel : ViewModel() {
             }
         }
     }
-    enum class PostKind(val kind: Int, val label: String) {
-        NOTE(1, "Note"), 
-        HIGHLIGHT(9802, "Highlight"),
-        REPOST(6, "Repost"),
-        MEDIA(0, "Media"),
-        FILE_METADATA(1063, "File Meta"),
-        ARTICLE(30023, "Article")
-    }
     
     var postKind by mutableStateOf(PostKind.NOTE)
 
@@ -1695,13 +1665,21 @@ class ProcessTextViewModel : ViewModel() {
             } else {
                 null
             }
+            
+            // If it's a repost but has content, it's effectively a Kind 1 Quote.
+            val storedKind = when {
+                postKind == PostKind.REPOST && quoteContent.isNotBlank() -> 1
+                postKind == PostKind.QUOTE -> 1
+                else -> postKind.kind
+            }
+
             val draft = Draft(
                 content = quoteContent,
                 sourceUrl = sourceUrl,
-                kind = if (postKind == PostKind.REPOST && quoteContent.isNotBlank()) 1 else postKind.kind,
+                kind = storedKind,
                 mediaJson = mediaJson,
                 mediaTitle = mediaTitle,
-                highlightEventId = highlightAuthor,
+                highlightEventId = highlightEventId,
                 highlightAuthor = highlightAuthor,
                 highlightKind = highlightKind,
                 highlightIdentifier = highlightIdentifier,
@@ -1733,11 +1711,18 @@ class ProcessTextViewModel : ViewModel() {
             } else {
                 null
             }
+            
+            val storedKind = when {
+                postKind == PostKind.REPOST && quoteContent.isNotBlank() -> 1
+                postKind == PostKind.QUOTE -> 1
+                else -> postKind.kind
+            }
+
             val draft = Draft(
                 id = currentDraftId ?: 0,
                 content = quoteContent,
                 sourceUrl = sourceUrl,
-                kind = if (postKind == PostKind.REPOST && quoteContent.isNotBlank()) 1 else postKind.kind,
+                kind = storedKind,
                 mediaJson = mediaJson,
                 mediaTitle = mediaTitle,
                 highlightEventId = highlightAuthor,
@@ -1828,6 +1813,7 @@ class ProcessTextViewModel : ViewModel() {
         articleSummary = draft.articleSummary ?: ""
         articleIdentifier = draft.articleIdentifier
 
+        // If it's a repost or quote, but we're missing the ID, try to extract it from JSON
         if (highlightEventId == null && !originalEventJson.isNullOrBlank()) {
             try {
                 val originalEvent = JSONObject(originalEventJson!!)
@@ -1837,6 +1823,16 @@ class ProcessTextViewModel : ViewModel() {
             } catch (_: Exception) {}
         }
         
+        // If it's a quote, ensure highlightEventId is extracted from content/sourceUrl if still missing
+        if (draft.isQuote && highlightEventId == null) {
+            val entity = NostrUtils.findNostrEntity(draft.content) ?: NostrUtils.findNostrEntity(draft.sourceUrl)
+            entity?.let {
+                highlightEventId = it.id
+                highlightAuthor = it.author
+                highlightKind = it.kind ?: 1
+            }
+        }
+
         savedContentBuffer = draft.savedContentBuffer ?: ""
         previewTitle = draft.previewTitle
         previewDescription = draft.previewDescription
@@ -1861,10 +1857,9 @@ class ProcessTextViewModel : ViewModel() {
             highlightRelays.clear()
         }
         
-        val loadedKind = PostKind.entries.find { it.kind == draft.kind } ?: PostKind.NOTE
-        postKind = loadedKind
+        postKind = draft.getEffectivePostKind()
         
-        if (loadedKind == PostKind.REPOST && !availableKinds.contains(PostKind.REPOST)) {
+        if (postKind == PostKind.REPOST && !availableKinds.contains(PostKind.REPOST)) {
             availableKinds = availableKinds + PostKind.REPOST
         } else if (highlightEventId != null && !availableKinds.contains(PostKind.REPOST)) {
             availableKinds = availableKinds + PostKind.REPOST
@@ -2163,6 +2158,29 @@ class ProcessTextViewModel : ViewModel() {
                      tags.put(org.json.JSONArray().put("t").put(match.groupValues[1].lowercase()))
                  }
                  
+                 event.put("tags", tags)
+             }
+             PostKind.QUOTE -> {
+                 event.put("kind", 1)
+                 var content = quoteContent.trim()
+                 if (sourceUrl.isNotBlank() && !content.contains(sourceUrl)) {
+                     content += "\n\n$sourceUrl"
+                 }
+                 mediaItems.filter { it.uploadedUrl != null }.forEach { item ->
+                    val url = item.uploadedUrl!!
+                    if (!content.contains(url)) {
+                        val prefix = if (content.isNotBlank()) "\n\n" else ""
+                        content += "$prefix$url"
+                    }
+                 }
+                 event.put("content", content)
+                 
+                 if (highlightEventId != null) {
+                     val qTag = org.json.JSONArray().put("q").put(highlightEventId)
+                     highlightRelays.firstOrNull()?.let { qTag.put(it) }
+                     highlightAuthor?.let { qTag.put(it) }
+                     tags.put(qTag)
+                 }
                  event.put("tags", tags)
              }
         }

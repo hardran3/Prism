@@ -254,8 +254,14 @@ object HistorySyncManager {
                     if (tag != null && tag.length() >= 2) {
                         val tagName = tag.optString(0)
                         if (tagName == "e" || tagName == "a") {
+                            // Support modern NIP-10 markers ("root", "reply")
                             val marker = if (tag.length() >= 4) tag.optString(3) else ""
                             if (marker == "reply" || marker == "root") {
+                                return true
+                            }
+                            // Support older positional tags: if there's an 'e' tag at all, 
+                            // and no specific marker is used (or it's empty), it's likely a reply.
+                            if (marker.isEmpty()) {
                                 return true
                             }
                         }
@@ -362,10 +368,17 @@ object HistorySyncManager {
                 highlightEventId = eventId
                 highlightAuthor = json.optString("pubkey")
                 highlightKind = 1
+                // Cache the JSON for potential quotes
+                repostOriginalEventJson = json.toString()
             }
             6, 16 -> {
                 if (content.startsWith("{") && content.contains("\"id\"")) {
                     repostOriginalEventJson = content
+                }
+                // CRITICAL: Extract target ID and populate sourceUrl for UI consistency
+                val targetId = tags.find { it.size >= 2 && it[0] == "e" }?.get(1)
+                if (targetId != null) {
+                    sourceUrl = "nostr:${com.ryans.nostrshare.NostrUtils.eventIdToNevent(targetId)}"
                 }
             }
             20, 22 -> {

@@ -1,6 +1,7 @@
 package com.ryans.nostrshare.data
 
 import androidx.room.*
+import com.ryans.nostrshare.nip55.PostKind
 
 @Entity(
     tableName = "drafts",
@@ -44,5 +45,17 @@ data class Draft(
 ) {
     @Ignore var isRemote: Boolean = false
     val isQuote: Boolean get() = kind == 1 && 
-        (com.ryans.nostrshare.NostrUtils.hasQuoteLink(content) || com.ryans.nostrshare.NostrUtils.hasQuoteLink(sourceUrl))
+        (highlightEventId != null || !originalEventJson.isNullOrBlank() || com.ryans.nostrshare.NostrUtils.hasQuoteLink(content) || com.ryans.nostrshare.NostrUtils.hasQuoteLink(sourceUrl))
+
+    fun getEffectivePostKind(): PostKind {
+        return when {
+            kind == 6 || kind == 16 -> PostKind.REPOST
+            kind == 9802 -> PostKind.HIGHLIGHT
+            kind == 0 -> PostKind.MEDIA
+            kind == 30023 -> PostKind.ARTICLE
+            kind == 1063 -> PostKind.FILE_METADATA
+            isQuote -> PostKind.QUOTE
+            else -> PostKind.NOTE
+        }
+    }
 }
