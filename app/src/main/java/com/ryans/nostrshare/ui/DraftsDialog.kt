@@ -570,11 +570,17 @@ fun IntegratedContent(
 ) {
     val segments = remember(content, mediaItems, linkMetadata, nostrEvent, targetLink, vm.usernameCache.size, sourceUrl) {
         val urlRegex = "(https?://[^\\s]+)".toRegex(RegexOption.IGNORE_CASE)
+        val markdownLinkRegex = "(!?)\\[([^\\]]*)\\]\\((https?://[^)]+)\\)".toRegex(RegexOption.IGNORE_CASE)
         val mediaUrlPattern = "(https?://[^\\s]+(?:\\.jpg|\\.jpeg|\\.png|\\.gif|\\.webp|\\.bmp|\\.svg|\\.mp4|\\.mov|\\.webm)(?:\\?[^\\s]*)?)".toRegex(RegexOption.IGNORE_CASE)
         val nostrRegex = "(nostr:)?(nevent1|note1|naddr1|npub1|nprofile1)[a-z0-9]+".toRegex(RegexOption.IGNORE_CASE)
         val eventLinkRegex = "(nostr:)?(nevent1|note1|naddr1)[a-z0-9]+".toRegex(RegexOption.IGNORE_CASE)
 
-        val allUrlMatches = urlRegex.findAll(content).toList()
+        val markdownMatches = markdownLinkRegex.findAll(content).toList()
+        val allUrlMatches = urlRegex.findAll(content).toList().filter { urlMatch ->
+            // Skip URLs that are already part of a markdown link
+            markdownMatches.none { md -> urlMatch.range.first >= md.range.first && urlMatch.range.last <= md.range.last }
+        }
+
         val mediaMatches = allUrlMatches.filter { match ->
             mediaUrlPattern.matches(match.value) || 
             mediaItems.any { it.uploadedUrl?.equals(match.value, ignoreCase = true) == true }
@@ -582,8 +588,9 @@ fun IntegratedContent(
         
         val ogUrl = linkMetadata?.url
         val ogMatch = if (ogUrl != null) {
-            allUrlMatches.find { match -> 
-                NostrUtils.urlsMatch(match.value, ogUrl) || (linkMetadata.title != null && match.value.contains(ogUrl.removePrefix("https://").removePrefix("http://").removeSuffix("/")))
+            (allUrlMatches + markdownMatches).find { match -> 
+                val urlToCompare = if (match.groupValues.size > 3) match.groupValues[3] else match.value
+                NostrUtils.urlsMatch(urlToCompare, ogUrl) || (linkMetadata.title != null && urlToCompare.contains(ogUrl.removePrefix("https://").removePrefix("http://").removeSuffix("/")))
             }
         } else null
 
@@ -606,7 +613,7 @@ fun IntegratedContent(
             ogMatch?.range != match.range
         }
         
-        val allMatches = (mediaMatches + genericUrlMatches + 
+        val allMatches = (mediaMatches + genericUrlMatches + markdownMatches +
                           listOfNotNull(ogMatch) + listOfNotNull(nostrMatch) + eventLinkMatches).distinctBy { it.range }.sortedBy { it.range.first }
 
         var i = 0
@@ -620,11 +627,30 @@ fun IntegratedContent(
                 }
             }
             
-            if (match == ogMatch || genericUrlMatches.contains(match)) {
+            if (match == ogMatch || genericUrlMatches.contains(match) || markdownMatches.contains(match)) {
                 if (!isHighlight) {
-                    // Kind 1: Hide URL text and render preview card In-line (with fallback)
-                    val meta = if (match == ogMatch) linkMetadata!! else com.ryans.nostrshare.utils.LinkMetadata(url = match.value)
-                    localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(meta, match.value))
+                    val isImageMarkdown = match.groupValues.size > 1 && match.groupValues[1] == "!"
+                    val display = if (match.groupValues.size > 2) match.groupValues[2] else match.value
+                    val url = if (match.groupValues.size > 3) match.groupValues[3] else match.value
+                    
+                    if (isImageMarkdown) {
+                        val lc = url.lowercase().substringBefore("?")
+                        val detectedMime = when {
+                            lc.endsWith(".mp4") || lc.endsWith(".mov") || lc.endsWith(".webm") || lc.endsWith(".avi") || lc.endsWith(".mkv") -> "video/mp4"
+                            lc.endsWith(".gif") -> "image/gif"
+                            lc.endsWith(".png") -> "image/png"
+                            lc.endsWith(".webp") -> "image/webp"
+                            lc.endsWith(".svg") -> "image/svg+xml"
+                            lc.endsWith(".jpg") || lc.endsWith(".jpeg") || lc.endsWith(".bmp") -> "image/jpeg"
+                            else -> null
+                        }
+                        val item = MediaUploadState(id = UUID.randomUUID().toString(), uri = Uri.parse(url), mimeType = detectedMime).apply { uploadedUrl = url }
+                        localSegments.add(com.ryans.nostrshare.ui.ContentSegment.MediaGroup(listOf(item)))
+                    } else {
+                        // Regular Link: Hide URL text and render preview card In-line (with fallback)
+                        val meta = if (match == ogMatch) linkMetadata!! else com.ryans.nostrshare.utils.LinkMetadata(url = url)
+                        localSegments.add(com.ryans.nostrshare.ui.ContentSegment.LinkPreview(meta, display))
+                    }
                     lastIndex = match.range.last + 1
                 } else {
                     // Highlight: KEEP URL text visible in the content
