@@ -142,6 +142,16 @@ object NostrUtils {
         val date = Date(ms)
         return SimpleDateFormat(pattern, Locale.getDefault()).format(date)
     }
+
+    fun getFormattedDelay(scheduledAt: Long, actualPublishedAt: Long): String {
+        val s1 = if (scheduledAt > 30_000_000_000L) scheduledAt / 1000L else scheduledAt
+        val s2 = if (actualPublishedAt > 30_000_000_000L) actualPublishedAt / 1000L else actualPublishedAt
+        val diff = s2 - s1
+        if (diff <= 0) return ""
+        val minutes = diff / 60
+        val seconds = diff % 60
+        return String.format("%d:%02d", minutes, seconds)
+    }
     
     fun normalizeUrl(url: String): String {
         val cleaned = url.trim().lowercase().substringBefore("#")

@@ -1,6 +1,8 @@
 package com.ryans.nostrshare.ui
 
 import android.net.Uri
+import android.widget.Toast
+import com.ryans.nostrshare.NostrShareApp
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.animation.*
@@ -23,13 +25,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -339,12 +346,20 @@ fun UnifiedList(items: List<HistoryUiModel>, isFiltered: Boolean, vm: ProcessTex
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryList(history: List<HistoryUiModel>, vm: ProcessTextViewModel, isFetching: Boolean, onClearHistory: () -> Unit, onOpenInClient: (HistoryUiModel) -> Unit, onMediaClick: (MediaUploadState) -> Unit, onRepost: (HistoryUiModel) -> Unit, onLoadMore: () -> Unit) {
     val listState = remember(vm.pubkey) { LazyListState() }
     val activeSyncPubkey by com.ryans.nostrshare.utils.HistorySyncManager.activePubkey.collectAsState()
     val discoveryCount by com.ryans.nostrshare.utils.HistorySyncManager.discoveryCount.collectAsState()
     val currentRelay by com.ryans.nostrshare.utils.HistorySyncManager.currentRelay.collectAsState()
+
+    var showRepostMenuFor by remember { mutableStateOf<String?>(null) }
+    var menuNote by remember { mutableStateOf<HistoryUiModel?>(null) }
+    
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
+    var tempDateMillis by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(listState, history.size, isFetching) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }.collect { lastIndex ->
@@ -380,8 +395,58 @@ fun HistoryList(history: List<HistoryUiModel>, vm: ProcessTextViewModel, isFetch
                 }
                 items(history, key = { it.id }) { note ->
                     UnifiedPostItem(note = note, vm = vm, onMediaClick = onMediaClick, actions = {
-                        if (note.isRemote && note.isSuccess) {
-                            TextButton(onClick = { onRepost(note) }) { Icon(Icons.Default.Schedule, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Repost") }
+                        if (note.isSuccess) {
+                            Box {
+                                TextButton(onClick = { 
+                                    menuNote = note
+                                    showRepostMenuFor = note.id 
+                                }) { 
+                                    Icon(Icons.Default.Schedule, null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Repost") 
+                                }
+
+                                if (showRepostMenuFor == note.id) {
+                                    val context = androidx.compose.ui.platform.LocalContext.current
+                                    // Using Popup for directional logic
+                                    androidx.compose.ui.window.Popup(
+                                        onDismissRequest = { showRepostMenuFor = null },
+                                        properties = androidx.compose.ui.window.PopupProperties(focusable = false),
+                                        alignment = Alignment.TopCenter,
+                                        offset = androidx.compose.ui.unit.IntOffset(0, -200) // Default offset, logic below handles flip
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = MaterialTheme.colorScheme.secondaryContainer,
+                                            tonalElevation = 8.dp,
+                                            modifier = Modifier.width(100.dp)
+                                        ) {
+                                            Column(Modifier.padding(4.dp)) {
+                                                // 1h closest to button (Logic: small to large)
+                                                listOf(1, 3, 6, 12, 24).forEach { hours ->
+                                                    TextButton(
+                                                        onClick = { 
+                                                            val t = System.currentTimeMillis() + (hours * 3600 * 1000L)
+                                                            vm.scheduleRepost(note, t)
+                                                            showRepostMenuFor = null 
+                                                        },
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) { Text("${hours}h") }
+                                                }
+                                                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                                                TextButton(
+                                                    onClick = { 
+                                                        menuNote = note
+                                                        showRepostMenuFor = null
+                                                        showDatePicker = true 
+                                                    },
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) { Icon(Icons.Default.CalendarMonth, null, modifier = Modifier.size(20.dp)) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             TextButton(onClick = { onOpenInClient(note) }) { Icon(Icons.Default.Link, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Open") }
                         }
                     })
@@ -394,6 +459,46 @@ fun HistoryList(history: List<HistoryUiModel>, vm: ProcessTextViewModel, isFetch
                 item { Spacer(Modifier.height(80.dp)) }
             }
             com.ryans.nostrshare.ui.FastScrollIndicator(lazyListState = listState, history = history, vm = vm, modifier = Modifier.align(Alignment.CenterEnd))
+        }
+
+        // Unified Pickers (identical to editor)
+        if (showDatePicker) {
+            val ds = rememberDatePickerState(initialSelectedDateMillis = System.currentTimeMillis())
+            DatePickerDialog(
+                onDismissRequest = { showDatePicker = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDatePicker = false
+                        showTimePicker = true
+                        tempDateMillis = ds.selectedDateMillis
+                    }) { Text("Next") }
+                }
+            ) { DatePicker(state = ds) }
+        }
+
+        if (showTimePicker) {
+            val ts = rememberTimePickerState()
+            AlertDialog(
+                onDismissRequest = { showTimePicker = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                            timeInMillis = tempDateMillis ?: System.currentTimeMillis()
+                        }
+                        val cal = java.util.Calendar.getInstance().apply {
+                            set(utc.get(java.util.Calendar.YEAR), utc.get(java.util.Calendar.MONTH), utc.get(java.util.Calendar.DAY_OF_MONTH), ts.hour, ts.minute, 0)
+                        }
+                        if (cal.timeInMillis <= System.currentTimeMillis()) {
+                            Toast.makeText(NostrShareApp.getInstance(), "Pick future time", Toast.LENGTH_SHORT).show()
+                        } else {
+                            menuNote?.let { vm.scheduleRepost(it, cal.timeInMillis) }
+                        }
+                        showTimePicker = false
+                    }) { Text("Schedule") }
+                },
+                title = { Text("Select Time") },
+                text = { TimePicker(state = ts) }
+            )
         }
     }
 }
@@ -441,28 +546,27 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                             }
                             if (icon != null) { Icon(icon, null, Modifier.size(16.dp), tint = statusColor); Spacer(Modifier.width(4.dp)) }
                             Text(date, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            
+                            if (note.scheduledAt != null && note.actualPublishedAt != null) {
+                                val delay = NostrUtils.getFormattedDelay(note.scheduledAt, note.actualPublishedAt)
+                                if (delay.isNotEmpty()) {
+                                    Text(" $delay", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+                                }
+                            }
                         }
                         Text(NostrUtils.getKindLabel(note.kind, note.contentSnippet, note.isQuote), style = MaterialTheme.typography.labelSmall)
                     }
                     Text(profile?.name ?: note.pubkey?.take(8) ?: "Draft", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(8.dp))
                     
-                    val density = androidx.compose.ui.platform.LocalDensity.current
-                    var trueContentHeightPx by remember { mutableIntStateOf(0) }
-                    val trueContentHeightDp = with(density) { trueContentHeightPx.toDp() }
-                    
-                    // Stabilize truncation state: once it's true, it stays true unless the content fundamentally changes
-                    val isTruncated = remember(trueContentHeightPx) { trueContentHeightDp > 360.dp }
+                    var isTruncated by remember { mutableStateOf(false) }
 
-                    Box(modifier = Modifier.fillMaxWidth().heightIn(max = if (isExpanded || !isTruncated) androidx.compose.ui.unit.Dp.Unspecified else 300.dp)) {
-                        // Use onSizeChanged for better stability, and only measure when NOT clamped if possible
-                        Column(modifier = Modifier.onSizeChanged { size -> 
-                            // Only update if the measured height is larger than our current "true" height
-                            // or if we are expanded (meaning we are seeing the full size)
-                            if (isExpanded || size.height > trueContentHeightPx || !isTruncated) {
-                                trueContentHeightPx = size.height
-                            }
-                        }) {
+                    TruncatableContent(
+                        isExpanded = isExpanded,
+                        onTruncatedChanged = { isTruncated = it },
+                        containerColor = containerColor
+                    ) {
+                        Column {
                             if (note.kind == 30023) {
                                 if (note.previewImageUrl != null) {
                                     AsyncImage(model = note.previewImageUrl, contentDescription = null, modifier = Modifier.fillMaxWidth().aspectRatio(16f/9f).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentScale = ContentScale.Crop)
@@ -497,21 +601,6 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                                     kind = note.kind
                                 )
                             }
-                        }
-                        
-                        // Fading edge overlay when collapsed AND truncated
-                        if (!isExpanded && isTruncated) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(40.dp)
-                                    .align(Alignment.BottomCenter)
-                                    .background(
-                                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                                            colors = listOf(Color.Transparent, containerColor)
-                                        )
-                                    )
-                            )
                         }
                     }
 
@@ -984,4 +1073,57 @@ fun MediaGridItem(item: MediaUploadState, modifier: Modifier, onMediaClick: (Med
         else AsyncImage(model = model, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     }
 }
+
+@Composable
+fun TruncatableContent(
+    isExpanded: Boolean,
+    onTruncatedChanged: (Boolean) -> Unit,
+    containerColor: Color,
+    content: @Composable () -> Unit
+) {
+    SubcomposeLayout(modifier = Modifier.fillMaxWidth().clipToBounds()) { constraints ->
+        // 1. Measure the content with infinite height to find its true size
+        val contentPlaceable = subcompose("content", content).first().measure(
+            constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity)
+        )
+        
+        val trueHeight = contentPlaceable.height
+        val threshold = 360.dp.roundToPx()
+        val limit = 300.dp.roundToPx()
+        val isTruncated = trueHeight > threshold
+        
+        // 2. Decide the final visual height
+        val displayHeight = if (isExpanded || !isTruncated) {
+            trueHeight
+        } else {
+            limit
+        }
+        
+        layout(contentPlaceable.width, displayHeight) {
+            // Place the content
+            contentPlaceable.placeRelative(0, 0)
+            
+            // 3. Add fading edge if truncated and NOT expanded
+            if (isTruncated && !isExpanded) {
+                subcompose("fading_edge") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(40.dp)
+                            .background(
+                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, containerColor)
+                                )
+                            )
+                    )
+                }.first().measure(constraints.copy(minHeight = 0, minWidth = contentPlaceable.width, maxWidth = contentPlaceable.width))
+                 .placeRelative(0, limit - 40.dp.roundToPx())
+            }
+        }.also {
+            // Notify parent of truncation state safely after measurement
+            onTruncatedChanged(isTruncated)
+        }
+    }
+}
+
 

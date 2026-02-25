@@ -1,6 +1,7 @@
 package com.ryans.nostrshare
 
 import android.content.Context
+import android.widget.Toast
 import androidx.lifecycle.ViewModel
 import android.util.Log
 import androidx.lifecycle.viewModelScope
@@ -830,6 +831,80 @@ class ProcessTextViewModel : ViewModel() {
     fun startSchedulingOnboarding() {
         currentOnboardingStep = OnboardingStep.SCHEDULING_CONFIG
         isOnboarded = false
+    }
+
+    fun scheduleRepost(note: HistoryUiModel, timeMillis: Long) {
+        val pk = pubkey ?: return
+        val signerPkg = signerPackageName ?: return
+        
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // 1. Prepare the Repost Event
+                val event = JSONObject()
+                event.put("created_at", System.currentTimeMillis() / 1000)
+                event.put("pubkey", pk)
+                event.put("id", "")
+                event.put("sig", "")
+                
+                val targetId = if (note.kind == 6 || note.kind == 16) {
+                    NostrUtils.getTargetEventIdFromRepost(note.originalEventJson ?: "") ?: note.id
+                } else {
+                    note.id
+                }
+                
+                val kind = if (note.kind == 1 || note.kind == 9802 || note.kind == 30023) 6 else 16
+                event.put("kind", kind)
+                event.put("content", note.originalEventJson ?: "")
+                
+                val tags = JSONArray()
+                tags.put(JSONArray().put("e").put(targetId).put(""))
+                tags.put(JSONArray().put("p").put(note.pubkey ?: ""))
+                if (note.kind != 1) {
+                    tags.put(JSONArray().put("k").put(note.kind.toString()))
+                }
+                event.put("tags", tags)
+
+                // 2. Sign in Background
+                val signedJson = com.ryans.nostrshare.nip55.Nip55.signEventBackground(
+                    NostrShareApp.getInstance(),
+                    signerPkg,
+                    event.toString(),
+                    pk
+                )
+
+                if (signedJson != null) {
+                    // 3. Save as Scheduled Draft
+                    val draft = Draft(
+                        content = "",
+                        sourceUrl = "nostr:${NostrUtils.eventIdToNevent(targetId)}",
+                        kind = kind,
+                        mediaJson = "[]",
+                        mediaTitle = "",
+                        originalEventJson = note.originalEventJson,
+                        pubkey = pk,
+                        scheduledAt = timeMillis,
+                        signedJson = signedJson,
+                        isScheduled = true,
+                        isCompleted = false
+                    )
+                    val newId = draftDao.insertDraft(draft)
+                    
+                    // 4. Enqueue Work
+                    withContext(Dispatchers.Main) {
+                        val context = NostrShareApp.getInstance()
+                        com.ryans.nostrshare.utils.SchedulerUtils.enqueueScheduledWork(context, draft.copy(id = newId.toInt()))
+                        com.ryans.nostrshare.utils.NotificationHelper.updateScheduledNotification(context)
+                        Toast.makeText(context, "Repost scheduled", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(NostrShareApp.getInstance(), "Background signing failed. Please check your signer app.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ProcessTextViewModel", "Failed to schedule repost", e)
+            }
+        }
     }
 
     fun completeSchedulingConfig() {
