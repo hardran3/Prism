@@ -113,7 +113,7 @@ object UnicodeStylizer {
     private val FORWARD_MAPS: Map<Style, Map<Int, String>> by lazy {
         mapOf(
             Style.SERIF_BOLD to createMap(0x1D400, 0x1D41A, 0x1D7CE),
-            Style.SERIF_ITALIC to createMap(0x1D434, 0x1D44E, null, mapOf('h'.code to 0x210E)),
+            Style.SERIF_ITALIC to createMap(0x1D434, 0x1D44E),
             Style.SERIF_BOLD_ITALIC to createMap(0x1D468, 0x1D482),
             Style.SANS_BOLD to createMap(0x1D5D4, 0x1D5EE, 0x1D7EC),
             Style.SANS_ITALIC to createMap(0x1D608, 0x1D622),

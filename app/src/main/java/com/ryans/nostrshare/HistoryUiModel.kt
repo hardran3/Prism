@@ -32,6 +32,7 @@ data class HistoryUiModel(
     val articleTitle: String? = null,
     val articleSummary: String? = null,
     val articleIdentifier: String? = null,
+    val publishedEventId: String? = null,
     val nostrEvent: JSONObject? = null,
     val targetLink: String? = null,
     val segments: List<ContentSegment> = emptyList()
@@ -112,6 +113,7 @@ fun Draft.toUiModel(isRemote: Boolean): HistoryUiModel {
         articleTitle = articleTitle,
         articleSummary = articleSummary,
         articleIdentifier = articleIdentifier,
+        publishedEventId = publishedEventId,
         nostrEvent = targetJson,
         targetLink = detectedLink
     )

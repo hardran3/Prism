@@ -38,10 +38,16 @@ enum class OnboardingStep {
     SERVER_SELECTION,
     SCHEDULING_CONFIG
 }
+
+enum class UploadSource {
+    SHARE_INTENT,
+    PICKER_BUTTON
+}
+
 class ProcessTextViewModel : ViewModel() {
     enum class HistoryFilter {
         NOTE, HIGHLIGHT, MEDIA, REPOST, QUOTE, ARTICLE,
-        HAS_MEDIA, IMAGE, GIF, VIDEO
+        HAS_MEDIA, IMAGE, GIF, VIDEO, YOUTUBE, WEB
     }
     var activeHistoryFilters = mutableStateListOf<HistoryFilter>()
     var activeHashtags = mutableStateListOf<String>()
@@ -271,6 +277,19 @@ class ProcessTextViewModel : ViewModel() {
         )
     }
 
+    fun applyHeading(level: Int) {
+        val prefix = "#".repeat(level) + " "
+        applyBlockMarkdown(prefix)
+    }
+
+    fun applyBlockquote() {
+        applyBlockMarkdown("> ")
+    }
+
+    fun applyList(prefix: String) {
+        applyBlockMarkdown(prefix)
+    }
+
     fun applyCodeMarkdown() {
         val selection = contentValue.selection
         val text = contentValue.text
@@ -307,14 +326,76 @@ class ProcessTextViewModel : ViewModel() {
     var showLinkDialog by mutableStateOf(false)
     var linkDialogText by mutableStateOf("")
     var linkDialogUrl by mutableStateOf("")
+    var isUploadingImageForLink by mutableStateOf(false)
+    
+    // Captured selection for link dialog
+    private var linkDialogSelStart = 0
+    private var linkDialogSelEnd = 0
+
+    fun onImageSelectedForLink(context: Context, uri: Uri) {
+        val mimeType = context.contentResolver.getType(uri) ?: "image/*"
+        val item = MediaUploadState(
+            id = UUID.randomUUID().toString(),
+            uri = uri,
+            mimeType = mimeType
+        )
+        
+        isUploadingImageForLink = true
+        prepareImageForLink(context, item)
+    }
+
+    private fun prepareImageForLink(context: Context, item: MediaUploadState) {
+        viewModelScope.launch {
+            try {
+                // Reuse existing image processing logic
+                val level = settingsRepository.getCompressionLevel()
+                val result = com.ryans.nostrshare.utils.ImageProcessor.processImage(context, item.uri, item.mimeType, level)
+                val stableUri = result?.uri ?: item.uri
+                
+                processedMediaUris[item.id] = stableUri
+                
+                // 1. Calculate Hash & Size (Required for proper Auth Event)
+                val hashResult = blossomClient.hashFile(context, stableUri)
+                val hash = hashResult.first
+                val size = hashResult.second
+                
+                // 2. Get blossom auth via centralized helper (Ensures 'expiration' tag is present)
+                val pk = pubkey ?: return@launch
+                val signerPkg = signerPackageName ?: return@launch
+                
+                val server = blossomServers.find { it.enabled }?.url ?: "https://blossom.primal.net"
+                
+                val authEventJson = blossomClient.createAuthEventJson(
+                    hash = hash,
+                    size = size,
+                    pubkey = pk,
+                    operation = "upload",
+                    serverUrl = server
+                )
+                
+                val signedAuthJson = com.ryans.nostrshare.nip55.Nip55.signEventBackground(context, signerPkg, authEventJson, pk)
+                
+                if (signedAuthJson != null) {
+                    val uploadResult = blossomClient.upload(context, null, stableUri, signedAuthJson, server, item.mimeType)
+                    linkDialogUrl = uploadResult.url
+                } else {
+                    Log.e("ProcessTextViewModel", "Failed to sign auth event for link image")
+                }
+            } catch (e: Exception) {
+                Log.e("ProcessTextViewModel", "Failed to upload image for link", e)
+            } finally {
+                isUploadingImageForLink = false
+            }
+        }
+    }
 
     fun openLinkDialog(clipboardUrl: String?) {
         val selection = contentValue.selection
         val text = contentValue.text
-        val selStart = selection.min.coerceIn(0, text.length)
-        val selEnd = selection.max.coerceIn(selStart, text.length)
+        linkDialogSelStart = selection.min.coerceIn(0, text.length)
+        linkDialogSelEnd = selection.max.coerceIn(linkDialogSelStart, text.length)
         
-        linkDialogText = if (!selection.collapsed) text.substring(selStart, selEnd) else ""
+        linkDialogText = if (linkDialogSelStart != linkDialogSelEnd) text.substring(linkDialogSelStart, linkDialogSelEnd) else ""
         linkDialogUrl = if (clipboardUrl?.startsWith("http") == true) clipboardUrl else ""
         showLinkDialog = true
     }
@@ -326,25 +407,45 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun applyLink(text: String, url: String) {
-        val selection = contentValue.selection
         val currentText = contentValue.text
-        val selStart = selection.min.coerceIn(0, currentText.length)
-        val selEnd = selection.max.coerceIn(selStart, currentText.length)
+        val start = linkDialogSelStart.coerceIn(0, currentText.length)
+        val end = linkDialogSelEnd.coerceIn(start, currentText.length)
 
         val finalLinkText = text.ifBlank { "text" }
         val finalLinkUrl = url.ifBlank { "url" }
-        val linkMarkdown = "[$finalLinkText]($finalLinkUrl)"
-        val newText = currentText.replaceRange(selStart, selEnd, linkMarkdown)
+        
+        val isImage = finalLinkUrl.lowercase().substringBefore("?").let { u ->
+            u.endsWith(".jpg") || u.endsWith(".jpeg") || u.endsWith(".png") || 
+            u.endsWith(".gif") || u.endsWith(".webp") || u.endsWith(".bmp") || u.endsWith(".svg")
+        }
+        
+        val prefix = if (isImage) "!" else ""
+        val linkMarkdown = "$prefix[$finalLinkText]($finalLinkUrl)"
+        
+        val newText = currentText.replaceRange(start, end, linkMarkdown)
         
         contentValue = contentValue.copy(
             text = newText,
-            selection = TextRange(selStart, selStart + linkMarkdown.length)
+            selection = TextRange(start, start + linkMarkdown.length)
         )
         showLinkDialog = false
     }
 
     fun applyLinkMarkdown(clipboardUrl: String?) {
-        // Deprecated by Link Dialog
+        val selection = contentValue.selection
+        val currentText = contentValue.text
+        val start = selection.min.coerceIn(0, currentText.length)
+        val end = selection.max.coerceIn(start, currentText.length)
+        
+        val url = if (clipboardUrl?.startsWith("http") == true) clipboardUrl else "url"
+        val label = if (start != end) currentText.substring(start, end) else "text"
+        val markdown = "[$label]($url)"
+        
+        val newText = currentText.replaceRange(start, end, markdown)
+        contentValue = contentValue.copy(
+            text = newText,
+            selection = TextRange(start, start + markdown.length)
+        )
     }
 
     // --- Optimized Data Flows ---
@@ -449,7 +550,7 @@ class ProcessTextViewModel : ViewModel() {
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Stage 2: Instant UI Filter - reactive to search and chips
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
     val uiHistory: StateFlow<List<HistoryUiModel>> = combine(
         processedHistoryItems,
         snapshotFlow { searchQuery }.debounce(250), 
@@ -479,7 +580,7 @@ class ProcessTextViewModel : ViewModel() {
                     }
                 }
 
-                val matchesMediaFilter = if (filters.none { it in listOf(HistoryFilter.HAS_MEDIA, HistoryFilter.IMAGE, HistoryFilter.GIF, HistoryFilter.VIDEO) }) {
+                val matchesMediaFilter = if (filters.none { it in listOf(HistoryFilter.HAS_MEDIA, HistoryFilter.IMAGE, HistoryFilter.GIF, HistoryFilter.VIDEO, HistoryFilter.YOUTUBE, HistoryFilter.WEB) }) {
                     true
                 } else {
                     val mediaUrls = item.mediaJson?.let { 
@@ -489,11 +590,14 @@ class ProcessTextViewModel : ViewModel() {
                         } catch (_: Exception) { emptyList<String>() }
                     } ?: emptyList()
                     
+                    val isYouTube = text.contains("youtube.com") || text.contains("youtu.be")
+                    
                     val hasAnyMedia = mediaUrls.isNotEmpty() || 
                                      text.contains(".jpg") || text.contains(".jpeg") || 
                                      text.contains(".png") || text.contains(".webp") || 
                                      text.contains(".gif") || text.contains(".mp4") || 
-                                     text.contains(".mov") || text.contains(".webm")
+                                     text.contains(".mov") || text.contains(".webm") ||
+                                     isYouTube
 
                     filters.any { filter ->
                         when (filter) {
@@ -503,6 +607,16 @@ class ProcessTextViewModel : ViewModel() {
                             HistoryFilter.GIF -> mediaUrls.any { it.endsWith(".gif") } || text.contains(".gif")
                             HistoryFilter.VIDEO -> mediaUrls.any { it.endsWith(".mp4") || it.endsWith(".mov") || it.endsWith(".webm") } ||
                                                   text.contains(".mp4") || text.contains(".mov") || text.contains(".webm")
+                            HistoryFilter.YOUTUBE -> isYouTube
+                            HistoryFilter.WEB -> {
+                                val hasUrlInText = text.contains("http://") || text.contains("https://")
+                                val hasUrlInSource = item.sourceUrl?.startsWith("http") == true
+                                
+                                val matchesKnownMedia = (hasAnyMedia && !isYouTube) || 
+                                                       mediaUrls.any { it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".png") || it.endsWith(".webp") || it.endsWith(".gif") || it.endsWith(".mp4") || it.endsWith(".mov") || it.endsWith(".webm") }
+                                
+                                (hasUrlInText || hasUrlInSource) && !matchesKnownMedia && !isYouTube
+                            }
                             else -> false
                         }
                     }
@@ -623,10 +737,12 @@ class ProcessTextViewModel : ViewModel() {
     var uploadedMediaUrl by mutableStateOf<String?>(null)
     var uploadedMediaHash by mutableStateOf<String?>(null)
     var uploadedMediaSize by mutableStateOf<Long?>(null)
+    var batchCompressionLevel by mutableStateOf<Int?>(null)
 
     init {
         isOnboarded = settingsRepository.isOnboarded()
         isSchedulingEnabled = settingsRepository.isSchedulingEnabled()
+        batchCompressionLevel = settingsRepository.getCompressionLevel()
         
         if (isOnboarded) {
             val savedPubkey = prefs.getString("pubkey", null)
@@ -847,9 +963,9 @@ class ProcessTextViewModel : ViewModel() {
                 event.put("sig", "")
                 
                 val targetId = if (note.kind == 6 || note.kind == 16) {
-                    NostrUtils.getTargetEventIdFromRepost(note.originalEventJson ?: "") ?: note.id
+                    NostrUtils.getTargetEventIdFromRepost(note.originalEventJson ?: "") ?: (note.publishedEventId ?: note.id)
                 } else {
-                    note.id
+                    note.publishedEventId ?: note.id
                 }
                 
                 val kind = if (note.kind == 1 || note.kind == 9802 || note.kind == 30023) 6 else 16
@@ -1072,7 +1188,6 @@ class ProcessTextViewModel : ViewModel() {
     var showSharingDialog by mutableStateOf(false)
     var isBatchUploading by mutableStateOf(false)
     var batchUploadStatus by mutableStateOf("")
-    var batchCompressionLevel by mutableStateOf<Int?>(null)
 
     val batchProgress: Float
         get() {
@@ -1219,7 +1334,7 @@ class ProcessTextViewModel : ViewModel() {
     var isSearchingUsers by mutableStateOf(false)
     var showUserSearchDialog by mutableStateOf(false)
     
-    fun onMediaSelected(context: Context, uris: List<Uri>) {
+    fun onMediaSelected(context: Context, uris: List<Uri>, source: UploadSource = UploadSource.PICKER_BUTTON) {
         uris.forEach { uri ->
             val mimeType = context.contentResolver.getType(uri) ?: "image/*"
             val item = MediaUploadState(
@@ -1231,7 +1346,7 @@ class ProcessTextViewModel : ViewModel() {
             
             if (mimeType.startsWith("video/") || mimeType.startsWith("image/")) {
                 availableKinds = listOf(PostKind.MEDIA, PostKind.NOTE, PostKind.ARTICLE)
-                if (!settingsRepository.isAlwaysUseKind1()) {
+                if (source == UploadSource.SHARE_INTENT && !settingsRepository.isAlwaysUseKind1()) {
                     setKind(PostKind.MEDIA)
                 }
             }
@@ -1664,9 +1779,21 @@ class ProcessTextViewModel : ViewModel() {
                     uploadedMediaSize = item.size
                 }
 
-                if (postKind == PostKind.NOTE) {
-                     val prefix = if (quoteContent.isNotBlank()) "\n\n" else ""
-                     quoteContent += "$prefix$firstSuccessUrl"
+                if (postKind == PostKind.NOTE || postKind == PostKind.QUOTE) {
+                    val currentText = contentValue.text
+                    val selection = contentValue.selection
+                    val insertText = if (currentText.isEmpty()) firstSuccessUrl else "\n\n$firstSuccessUrl"
+                    
+                    val newText = currentText.replaceRange(
+                        selection.min.coerceIn(0, currentText.length),
+                        selection.max.coerceIn(0, currentText.length),
+                        insertText
+                    )
+                    
+                    contentValue = contentValue.copy(
+                        text = newText,
+                        selection = TextRange(selection.min + insertText.length)
+                    )
                 }
             } else {
                 item.status = "All uploads failed"
@@ -2334,9 +2461,50 @@ class ProcessTextViewModel : ViewModel() {
                 
                 val successfulRelaysCount = relaySuccessMap.count { it.value }
                 if (totalPostSuccess > 0) {
+                    val now = System.currentTimeMillis()
                     publishStatus = "Success! Published to $successfulRelaysCount/${relaysToPublish.size} relays."
                     publishSuccess = true
-                    discardDraft()
+                    
+                    // Persist completion data for history
+                    val currentQuoteContent = quoteContent
+                    val currentSourceUrl = sourceUrl
+                    val currentMediaTitle = mediaTitle
+                    val currentArticleTitle = articleTitle
+                    val currentArticleSummary = articleSummary
+                    val currentArticleIdentifier = articleIdentifier
+                    val currentMediaItemsJson = serializeMediaItems(mediaItems)
+                    val currentPubkey = pubkey
+                    val currentOriginalEventJson = originalEventJson
+
+                    viewModelScope.launch(Dispatchers.IO) {
+                        signedEventsJson.forEach { json ->
+                            try {
+                                val obj = JSONObject(json)
+                                val eventId = obj.optString("id")
+                                val kind = obj.optInt("kind")
+                                
+                                val historyDraft = Draft(
+                                    content = obj.optString("content"),
+                                    sourceUrl = currentSourceUrl,
+                                    kind = kind,
+                                    mediaJson = currentMediaItemsJson,
+                                    mediaTitle = currentMediaTitle,
+                                    pubkey = currentPubkey,
+                                    isCompleted = true,
+                                    publishedEventId = eventId,
+                                    actualPublishedAt = now,
+                                    articleTitle = currentArticleTitle,
+                                    articleSummary = currentArticleSummary,
+                                    articleIdentifier = currentArticleIdentifier,
+                                    originalEventJson = currentOriginalEventJson ?: json
+                                )
+                                draftDao.insertDraft(historyDraft)
+                            } catch (_: Exception) {}
+                        }
+                        withContext(Dispatchers.Main) {
+                            discardDraft()
+                        }
+                    }
                 } else {
                     if (!isNetworkAvailable()) {
                         val mediaJson = serializeMediaItems(mediaItems)

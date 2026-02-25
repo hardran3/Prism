@@ -43,7 +43,7 @@ class ScheduledNoteWorker(
 
     companion object {
         const val CHANNEL_ID_PROGRESS = "scheduled_progress"
-        const val CHANNEL_ID_ALERTS = "scheduled_alerts_v2"
+        const val CHANNEL_ID_ALERTS = "scheduled_alerts_v3"
         const val NOTIFICATION_ID = 1002
         const val GROUP_KEY_SUCCESS = "com.ryans.nostrshare.SENT_SUCCESS"
     }

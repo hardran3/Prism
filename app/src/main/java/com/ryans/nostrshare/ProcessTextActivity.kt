@@ -414,14 +414,15 @@ class ProcessTextActivity : ComponentActivity() {
                         if (vm.postKind == PostKind.ARTICLE) {
                             OutlinedTextField(value = vm.articleTitle, onValueChange = { vm.articleTitle = it }, label = { Text("Article Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, textStyle = MaterialTheme.typography.titleMedium, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
                             Spacer(Modifier.height(8.dp))
-                                                    OutlinedTextField(value = vm.articleSummary, onValueChange = { vm.articleSummary = it }, label = { Text("Article Summary (Optional)") }, modifier = Modifier.fillMaxWidth(), maxLines = 2, textStyle = MaterialTheme.typography.bodySmall, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
-                                                    Spacer(Modifier.height(8.dp))
-                                                } else if (vm.postKind == PostKind.MEDIA) {
-                                                    OutlinedTextField(value = vm.mediaTitle, onValueChange = { vm.mediaTitle = it }, label = { Text("Media Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
-                                                    Spacer(Modifier.height(8.dp))
-                                                }
-                                                Text(text = if (vm.postKind == PostKind.ARTICLE) "Body (Markdown)" else "Content", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                                            }
+                            OutlinedTextField(value = vm.articleSummary, onValueChange = { vm.articleSummary = it }, label = { Text("Article Summary (Optional)") }, modifier = Modifier.fillMaxWidth(), maxLines = 2, textStyle = MaterialTheme.typography.bodySmall, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
+                            Spacer(Modifier.height(8.dp))
+                        } else if (vm.postKind == PostKind.MEDIA) {
+                            OutlinedTextField(value = vm.mediaTitle, onValueChange = { vm.mediaTitle = it }, label = { Text("Media Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        Text(text = if (vm.postKind == PostKind.ARTICLE) "Body (Markdown)" else "Content", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                    
                     val highlightColor = MaterialTheme.colorScheme.primary
                     val codeColor = MaterialTheme.colorScheme.secondary
                     val quoteColor = MaterialTheme.colorScheme.tertiary
@@ -453,7 +454,7 @@ class ProcessTextActivity : ComponentActivity() {
                             } else vm.contentValue = newValue
                         },
                         modifier = Modifier.fillMaxWidth().weight(1f).focusRequester(focusRequester),
-                        textStyle = if (isFullscreenMode) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyLarge,
+                        textStyle = MaterialTheme.typography.bodyLarge,
                         visualTransformation = remember(vm.usernameCache.size, highlightColor, vm.isVisualMode, h1Style, h2Style, h3Style) {
                             MarkdownVisualTransformation(vm.usernameCache, highlightColor, codeColor, quoteColor, linkColor, nostrColor, h1Style, h2Style, h3Style, stripDelimiters = vm.isVisualMode)
                         },
@@ -708,162 +709,8 @@ class MarkdownVisualTransformation(
 ) : VisualTransformation {
     override fun filter(text: androidx.compose.ui.text.AnnotatedString): androidx.compose.ui.text.input.TransformedText {
         val original = text.text
-        if (!stripDelimiters) return filterStyleOnly(original)
-
-        return try {
-            filterStripDelimiters(original)
-        } catch (_: Exception) {
-            filterStyleOnly(original)
-        }
-    }
-
-    private fun filterStripDelimiters(original: String): androidx.compose.ui.text.input.TransformedText {
-        val builder = androidx.compose.ui.text.AnnotatedString.Builder()
-        val originalToTransformed = IntArray(original.length + 1)
-        val transformedToOriginalList = mutableListOf<Int>()
-
-        var origIdx = 0
-        var transIdx = 0
-
-        fun emitOriginal(count: Int) {
-            val safeCount = count.coerceAtMost(original.length - origIdx).coerceAtLeast(0)
-            if (safeCount == 0) return
-            builder.append(original.substring(origIdx, origIdx + safeCount))
-            for (k in 0 until safeCount) {
-                originalToTransformed[origIdx + k] = transIdx + k
-                transformedToOriginalList.add(origIdx + k)
-            }
-            origIdx += safeCount
-            transIdx += safeCount
-        }
-
-        fun skipOriginal(count: Int) {
-            val safeCount = count.coerceAtMost(original.length - origIdx).coerceAtLeast(0)
-            for (k in 0 until safeCount) {
-                originalToTransformed[origIdx + k] = transIdx
-            }
-            origIdx += safeCount
-        }
-
-        fun emitReplacement(replacement: String, origCount: Int) {
-            val safeCount = origCount.coerceAtMost(original.length - origIdx).coerceAtLeast(0)
-            builder.append(replacement)
-            for (k in 0 until safeCount) {
-                originalToTransformed[origIdx + k] = transIdx
-            }
-            for (k in replacement.indices) {
-                transformedToOriginalList.add(origIdx)
-            }
-            origIdx += safeCount
-            transIdx += replacement.length
-        }
-
-        val lines = original.split('\n')
-        var lineOrigStart = 0
-        val numberedListRegex = Regex("^\\d+\\. ")
-
-        val inCodeBlock = BooleanArray(lines.size)
-        val isFenceLine = BooleanArray(lines.size)
-        var fenceOpen = false
-        for (idx in lines.indices) {
-            if (lines[idx].trimStart().startsWith("```")) {
-                isFenceLine[idx] = true
-                fenceOpen = !fenceOpen
-            } else if (fenceOpen) {
-                inCodeBlock[idx] = true
-            }
-        }
-
-        val codeSpanStyle = androidx.compose.ui.text.SpanStyle(
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-            background = codeColor.copy(alpha = 0.1f),
-            color = codeColor
-        )
-
-        lines.forEachIndexed { i, line ->
-            origIdx = lineOrigStart
-
-            when {
-                isFenceLine[i] -> { skipOriginal(line.length) }
-                inCodeBlock[i] -> { builder.pushStyle(codeSpanStyle); emitOriginal(line.length); builder.pop() }
-                line.startsWith("#") && line.getOrNull(line.takeWhile { it == '#' }.length) == ' ' -> {
-                    val level = line.takeWhile { it == '#' }.length
-                    val prefixLen = level + 1
-                    val style = when(level) {
-                        1 -> h1Style
-                        2 -> h2Style
-                        else -> h3Style
-                    }
-                    val spanStyle = androidx.compose.ui.text.SpanStyle(
-                        fontSize = style?.fontSize ?: androidx.compose.ui.unit.TextUnit.Unspecified,
-                        fontWeight = FontWeight.Bold,
-                        color = highlightColor
-                    )
-                    skipOriginal(prefixLen)
-                    builder.pushStyle(spanStyle); emitOriginal(line.substring(prefixLen).length); builder.pop()
-                }
-                line.startsWith("> ") -> {
-                    val spanStyle = androidx.compose.ui.text.SpanStyle(color = quoteColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, background = quoteColor.copy(alpha = 0.05f))
-                    skipOriginal(2); builder.pushStyle(spanStyle); emitOriginal(line.length - 2); builder.pop()
-                }
-                line.startsWith("- ") || line.startsWith("* ") -> { emitReplacement("• ", 2); emitOriginal(line.length - 2) }
-                numberedListRegex.containsMatchIn(line) -> {
-                    val matchResult = numberedListRegex.find(line)
-                    if (matchResult != null) {
-                        val prefix = matchResult.value
-                        builder.pushStyle(androidx.compose.ui.text.SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold))
-                        emitOriginal(prefix.length); builder.pop(); emitOriginal(line.length - prefix.length)
-                    } else { emitOriginal(line.length) }
-                }
-                else -> {
-                    val lineEnd = origIdx + line.length
-                    val pattern = "(\\[([^\\]]+)\\]\\((https?://[^)]+)\\)|https?://[^\\s]+|nostr:(?:nevent1|note1|naddr1|npub1|nprofile1)[a-z0-9]+|\\*\\*(.+?)\\*\\*|__(.+?)__|\\*(.+?)\\*|_(.+?)_|`([^`]+)`|#\\w+)".toRegex(RegexOption.IGNORE_CASE)
-                    var lastOrigIdx = origIdx
-                    pattern.findAll(line).forEach { match ->
-                        val matchStart = lineOrigStart + match.range.first
-                        val matchEnd = lineOrigStart + match.range.last + 1
-                        if (matchStart > lastOrigIdx) { emitOriginal(matchStart - lastOrigIdx) }
-                        val m = match.value
-                        when {
-                            match.groupValues.size > 3 && match.groupValues[2].isNotEmpty() && match.groupValues[3].isNotEmpty() -> {
-                                skipOriginal(1); builder.pushStyle(androidx.compose.ui.text.SpanStyle(color = linkColor, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline))
-                                emitOriginal(match.groupValues[2].length); builder.pop(); val suffixLen = matchEnd - origIdx; if (suffixLen > 0) skipOriginal(suffixLen)
-                            }
-                            m.startsWith("http") -> { builder.pushStyle(androidx.compose.ui.text.SpanStyle(color = linkColor, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)); emitOriginal(m.length); builder.pop() }
-                            m.startsWith("nostr:") -> {
-                                val entity = m.removePrefix("nostr:")
-                                val pk = try { NostrUtils.findNostrEntity(entity)?.id } catch(_: Exception) { null }
-                                val name = pk?.let { usernameCache[it]?.name }
-                                builder.pushStyle(androidx.compose.ui.text.SpanStyle(color = nostrColor, fontWeight = FontWeight.Bold))
-                                if (name != null) { emitReplacement("@$name", m.length) } else { emitOriginal(m.length) }
-                                builder.pop()
-                            }
-                            m.length >= 4 && ((m.startsWith("**") && m.endsWith("**")) || (m.startsWith("__") && m.endsWith("__"))) -> { skipOriginal(2); builder.pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)); emitOriginal(m.length - 4); builder.pop(); skipOriginal(2) }
-                            m.length >= 2 && ((m.startsWith("*") && m.endsWith("*")) || (m.startsWith("_") && m.endsWith("_"))) -> { skipOriginal(1); builder.pushStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)); emitOriginal(m.length - 2); builder.pop(); skipOriginal(1) }
-                            m.length >= 2 && m.startsWith("`") && m.endsWith("`") -> { skipOriginal(1); builder.pushStyle(androidx.compose.ui.text.SpanStyle(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, background = codeColor.copy(alpha = 0.1f), color = codeColor)); emitOriginal(m.length - 2); builder.pop(); skipOriginal(1) }
-                            m.startsWith("#") -> { builder.pushStyle(androidx.compose.ui.text.SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)); emitOriginal(m.length); builder.pop() }
-                            else -> emitOriginal(m.length)
-                        }
-                        lastOrigIdx = origIdx
-                    }
-                    if (origIdx < lineEnd) { emitOriginal(lineEnd - origIdx) }
-                }
-            }
-            if (i < lines.size - 1) { emitOriginal(1) }
-            lineOrigStart += line.length + 1
-        }
-        while (origIdx < original.length) { originalToTransformed[origIdx] = transIdx; origIdx++ }
-        originalToTransformed[original.length] = transIdx; transformedToOriginalList.add(original.length)
-        val transformedToOriginal = transformedToOriginalList.toIntArray()
-        val offsetMapping = object : androidx.compose.ui.text.input.OffsetMapping {
-            override fun originalToTransformed(offset: Int) = originalToTransformed[offset.coerceIn(0, original.length)]
-            override fun transformedToOriginal(offset: Int) = if (transformedToOriginal.isEmpty()) offset else transformedToOriginal[offset.coerceIn(0, transformedToOriginal.size - 1)]
-        }
-        return androidx.compose.ui.text.input.TransformedText(builder.toAnnotatedString(), offsetMapping)
-    }
-
-    private fun filterStyleOnly(original: String): androidx.compose.ui.text.input.TransformedText {
-        val styledText = MarkdownUtils.renderMarkdown(
+        
+        val result = com.ryans.nostrshare.utils.MarkdownUtils.renderMarkdown(
             text = original,
             usernameCache = usernameCache,
             highlightColor = highlightColor,
@@ -875,7 +722,21 @@ class MarkdownVisualTransformation(
             h3Style = h3Style,
             stripDelimiters = stripDelimiters
         )
-        return androidx.compose.ui.text.input.TransformedText(styledText, androidx.compose.ui.text.input.OffsetMapping.Identity)
+
+        val offsetMapping = object : androidx.compose.ui.text.input.OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int {
+                val idx = offset.coerceIn(0, original.length)
+                return if (idx < result.originalToTransformed.size) result.originalToTransformed[idx] else result.annotatedString.length
+            }
+
+            override fun transformedToOriginal(offset: Int): Int {
+                if (result.transformedToOriginal.isEmpty()) return 0
+                val idx = offset.coerceIn(0, result.transformedToOriginal.size - 1)
+                return result.transformedToOriginal[idx]
+            }
+        }
+
+        return androidx.compose.ui.text.input.TransformedText(result.annotatedString, offsetMapping)
     }
 }
 
