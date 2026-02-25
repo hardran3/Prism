@@ -30,12 +30,14 @@ class SettingsRepository(appContext: Context) {
         "https://files.sovbit.host"
     )
 
-    fun isOnboarded(): Boolean {
-        return prefs.getBoolean("onboarded_completed", false)
+    fun isOnboarded(pubkey: String? = null): Boolean {
+        val key = if (pubkey != null) "${pubkey}_onboarded_completed" else "onboarded_completed"
+        return prefs.getBoolean(key, false)
     }
 
-    fun setOnboarded(onboarded: Boolean) {
-        prefs.edit().putBoolean("onboarded_completed", onboarded).apply()
+    fun setOnboarded(onboarded: Boolean, pubkey: String? = null) {
+        val key = if (pubkey != null) "${pubkey}_onboarded_completed" else "onboarded_completed"
+        prefs.edit().putBoolean(key, onboarded).apply()
     }
 
     fun isSchedulingEnabled(): Boolean = prefs.getBoolean("scheduling_enabled", false)

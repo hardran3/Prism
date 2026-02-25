@@ -3,7 +3,7 @@ package com.ryans.nostrshare.data
 import android.content.Context
 import androidx.room.*
 
-@Database(entities = [Draft::class], version = 12, exportSchema = false)
+@Database(entities = [Draft::class], version = 13, exportSchema = false)
 abstract class DraftDatabase : RoomDatabase() {
     abstract fun draftDao(): DraftDao
 
@@ -56,6 +56,12 @@ abstract class DraftDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_12_13 = object : androidx.room.migration.Migration(12, 13) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_drafts_pubkey ON drafts (pubkey)")
+            }
+        }
+
         fun getDatabase(context: Context): DraftDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -63,7 +69,7 @@ abstract class DraftDatabase : RoomDatabase() {
                     DraftDatabase::class.java,
                     "prism_database.db"
                 )
-                .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                 .build()
                 INSTANCE = instance
                 instance

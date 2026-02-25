@@ -5,7 +5,10 @@ import com.ryans.nostrshare.nip55.PostKind
 
 @Entity(
     tableName = "drafts",
-    indices = [Index(value = ["publishedEventId"], unique = true)]
+    indices = [
+        Index(value = ["publishedEventId"], unique = true),
+        Index(value = ["pubkey"])
+    ]
 )
 data class Draft(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,

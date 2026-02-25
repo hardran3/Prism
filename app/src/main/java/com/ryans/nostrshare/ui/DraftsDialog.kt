@@ -543,7 +543,12 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
         Column(modifier = Modifier.padding(12.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                 Box(modifier = Modifier.size(40.dp).padding(top = 4.dp)) {
-                    UserAvatar(pictureUrl = profile?.pictureUrl, size = 40.dp)
+                    UserAvatar(
+                        pictureUrl = profile?.pictureUrl,
+                        pubkey = note.pubkey,
+                        vm = vm,
+                        size = 40.dp
+                    )
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -600,14 +605,54 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                                     linkMeta = com.ryans.nostrshare.utils.LinkMetadata(url = note.sourceUrl ?: "", title = note.previewTitle, description = note.previewDescription, imageUrl = note.previewImageUrl, siteName = note.previewSiteName)
                                 }
                                 
+                                // Lazy Resolution: Move JSON parsing from background flow to row-level UI
+                                val resolvedState = remember(note.id, note.originalEventJson, note.contentSnippet) {
+                                    var targetJson: JSONObject? = null
+                                    var detectedLink: String? = null
+                                    
+                                    val rootJson = note.originalEventJson?.let { 
+                                        try { JSONObject(it) } catch (_: Exception) { null } 
+                                    }
+
+                                    when {
+                                        note.kind == 6 || note.kind == 16 -> {
+                                            targetJson = rootJson
+                                            if (targetJson == null && note.contentSnippet.trim().startsWith("{")) {
+                                                targetJson = try { JSONObject(note.contentSnippet) } catch (_: Exception) { null }
+                                            }
+                                            if (note.sourceUrl?.isNotBlank() == true) {
+                                                detectedLink = note.sourceUrl.removePrefix("nostr:")
+                                            }
+                                        }
+                                        note.isQuote -> {
+                                            val regex = "(nostr:)?(nevent1|note1|naddr1)[a-z0-9]+".toRegex(RegexOption.IGNORE_CASE)
+                                            val match = regex.find(note.contentSnippet) ?: note.sourceUrl?.let { regex.find(it) }
+                                            detectedLink = match?.value?.removePrefix("nostr:")
+                                            targetJson = rootJson
+                                        }
+                                        else -> {
+                                            targetJson = rootJson
+                                        }
+                                    }
+                                    
+                                    // Self-preview suppression
+                                    if (note.publishedEventId != null) {
+                                        if (targetJson?.optString("id") == note.publishedEventId) targetJson = null
+                                        val entity = detectedLink?.let { com.ryans.nostrshare.NostrUtils.findNostrEntity(it) }
+                                        if (entity?.id == note.publishedEventId) detectedLink = null
+                                    }
+                                    
+                                    targetJson to detectedLink
+                                }
+
                                 IntegratedContent(
                                     content = contentToRender, 
                                     vm = vm, 
                                     onMediaClick = onMediaClick, 
                                     mediaItems = parseMediaJson(note.mediaJson), 
                                     linkMetadata = linkMeta, 
-                                    nostrEvent = note.nostrEvent, 
-                                    targetLink = note.targetLink,
+                                    nostrEvent = resolvedState.first, 
+                                    targetLink = resolvedState.second,
                                     isHighlight = note.kind == 9802,
                                     sourceUrl = note.sourceUrl,
                                     kind = note.kind
@@ -671,7 +716,7 @@ fun IntegratedContent(
 ) {
     var showMediaDetail by remember { mutableStateOf<MediaUploadState?>(null) }
     
-    val segments = remember(content, mediaItems, linkMetadata, nostrEvent, targetLink, vm.usernameCache.size, sourceUrl) {
+    val segments = remember(content, mediaItems, linkMetadata, nostrEvent, targetLink, sourceUrl) {
         val urlRegex = "(https?://[^\\s]+)".toRegex(RegexOption.IGNORE_CASE)
         // Improved Regex: Supports one level of balanced parentheses in URLs
         val markdownLinkRegex = "(!?)\\[([^\\]]*?)\\]\\((https?://[^\\s)]+(?:\\([^\\s)]*\\)[^\\s)]*)*)\\)".toRegex(RegexOption.IGNORE_CASE)
@@ -1031,7 +1076,12 @@ fun NostrEventPreview(event: JSONObject, vm: ProcessTextViewModel, onMediaClick:
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                UserAvatar(pictureUrl = profile?.pictureUrl, size = 24.dp)
+                UserAvatar(
+                    pictureUrl = profile?.pictureUrl,
+                    pubkey = pubkey,
+                    vm = vm,
+                    size = 24.dp
+                )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     Text(text = profile?.name ?: pubkey.take(8), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
@@ -1041,11 +1091,12 @@ fun NostrEventPreview(event: JSONObject, vm: ProcessTextViewModel, onMediaClick:
             Spacer(Modifier.height(8.dp))
             
             // Recursive use of IntegratedContent ensures media/links in quotes work consistently
+            val media = remember(event) { parseMediaJsonFromTags(event.optJSONArray("tags")) }
             IntegratedContent(
                 content = content,
                 vm = vm,
                 onMediaClick = onMediaClick,
-                mediaItems = parseMediaJsonFromTags(event.optJSONArray("tags")),
+                mediaItems = media,
                 kind = kind
             )
         }

@@ -51,18 +51,40 @@ object HistorySyncManager {
                 _isSyncing.value = true
                 _discoveryCount.value = 0
                 
-                Log.d(TAG, "Starting Full Sync for $pubkey")
+                Log.d(TAG, "Starting Progressive Sync for $pubkey (Non-destructive)")
+                
+                // CRITICAL: We no longer delete history by default. 
+                // Only delta/pagination is used unless the user explicitly wipes the DB.
+                performSync(pubkey, relayManager, draftDao, until = System.currentTimeMillis() / 1000)
+                
+                Log.d(TAG, "Sync Completed")
+            } catch (e: Exception) {
+                if (e is CancellationException) Log.d(TAG, "Sync Cancelled")
+                else Log.e(TAG, "Sync Failed", e)
+            } finally {
+                cleanup()
+            }
+        }
+    }
+    
+    fun forceWipeAndSync(pubkey: String, relayManager: RelayManager, draftDao: DraftDao) {
+        if (activeJob?.isActive == true) return
+        
+        activeJob = scope.launch {
+            try {
+                _activePubkey.value = pubkey
+                _isSyncing.value = true
+                _discoveryCount.value = 0
+                
+                Log.d(TAG, "Wiping and Re-Syncing for $pubkey")
                 
                 withContext(Dispatchers.IO) {
                     draftDao.deleteRemoteHistory(pubkey)
                 }
                 
                 performSync(pubkey, relayManager, draftDao, until = System.currentTimeMillis() / 1000)
-                
-                Log.d(TAG, "Full Sync Completed")
             } catch (e: Exception) {
-                if (e is CancellationException) Log.d(TAG, "Sync Cancelled")
-                else Log.e(TAG, "Sync Failed", e)
+                Log.e(TAG, "Manual Wipe Sync Failed", e)
             } finally {
                 cleanup()
             }
@@ -142,19 +164,37 @@ object HistorySyncManager {
         val existingIds = withContext(Dispatchers.IO) {
             draftDao.getAllRemoteIds(syncPubkey).toSet()
         }
-
-        relayManager.fetchLatestParallel(syncPubkey, kinds, since) { note ->
-            val noteId = note.optString("id")
-            val noteAuthor = note.optString("pubkey")
-            
-            if (noteAuthor == syncPubkey && !isReply(note) && !existingIds.contains(noteId)) {
-                _discoveryCount.value++
-                val draft = processRemoteNote(note, syncPubkey)
-                
-                scope.launch(Dispatchers.IO) {
-                    draftDao.syncRemoteNotes(listOf(draft))
+        
+        val noteChannel = Channel<Draft>(capacity = 500)
+        val saverJob = launch(Dispatchers.IO) {
+            val batch = mutableListOf<Draft>()
+            for (draft in noteChannel) {
+                batch.add(draft)
+                if (batch.size >= 50) {
+                    draftDao.syncRemoteNotes(batch.toList(), syncPubkey)
+                    batch.clear()
                 }
             }
+            if (batch.isNotEmpty()) draftDao.syncRemoteNotes(batch, syncPubkey)
+        }
+
+        try {
+            relayManager.fetchLatestParallel(syncPubkey, kinds, since) { note ->
+                val noteId = note.optString("id")
+                val noteAuthor = note.optString("pubkey")
+                
+                if (noteAuthor == syncPubkey && !isReply(note) && !existingIds.contains(noteId)) {
+                    _discoveryCount.value++
+                    val draft = processRemoteNote(note, syncPubkey)
+                    
+                    runBlocking {
+                        noteChannel.send(draft)
+                    }
+                }
+            }
+        } finally {
+            noteChannel.close()
+            saverJob.join()
         }
     }
 
@@ -177,11 +217,11 @@ object HistorySyncManager {
             for (draft in noteChannel) {
                 batch.add(draft)
                 if (batch.size >= 25) {
-                    draftDao.syncRemoteNotes(batch.toList())
+                    draftDao.syncRemoteNotes(batch.toList(), syncPubkey)
                     batch.clear()
                 }
             }
-            if (batch.isNotEmpty()) draftDao.syncRemoteNotes(batch)
+            if (batch.isNotEmpty()) draftDao.syncRemoteNotes(batch, syncPubkey)
         }
 
         try {

@@ -98,6 +98,19 @@ class ProcessTextViewModel : ViewModel() {
     var highlightIdentifier by mutableStateOf<String?>(null)
     var highlightRelays = mutableStateListOf<String>()
     var originalEventJson by mutableStateOf<String?>(null)
+    private var userRefreshJob: Job? = null
+
+    // High-performance cache for HistoryUiModels to prevent O(N) JSON parsing on every DB update
+    private val historyModelCache = java.util.Collections.synchronizedMap(object : LinkedHashMap<String, HistoryUiModel>(500, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, HistoryUiModel>?) = size > 15000
+    })
+    
+    private fun getMemoizedUiModel(draft: Draft, isRemote: Boolean): HistoryUiModel? {
+        val cacheKey = "${draft.id}_${draft.lastEdited}_${draft.actualPublishedAt}_$isRemote"
+        return historyModelCache.getOrPut(cacheKey) {
+            try { draft.toUiModel(isRemote) } catch (e: Exception) { null } ?: return null
+        }
+    }
     private var savedContentBuffer by mutableStateOf("")
 
     // Onboarding State
@@ -469,8 +482,8 @@ class ProcessTextViewModel : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Stage 1: Pre-process database history into lightweight models
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val processedHistoryItems: Flow<List<HistoryUiModel>> = combine(
+    @OptIn(ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
+    private val processedHistoryItems: StateFlow<List<HistoryUiModel>> = combine(
         snapshotFlow { pubkey },
         snapshotFlow { isFullHistoryEnabled }
     ) { pk, isEnabled -> 
@@ -478,24 +491,23 @@ class ProcessTextViewModel : ViewModel() {
     }.flatMapLatest { (pk, isEnabled) ->
         if (pk == null) return@flatMapLatest flowOf(emptyList<HistoryUiModel>())
         
-        combine(
-            draftDao.getScheduledHistory(pk),
-            if (isEnabled) draftDao.getRemoteHistory(pk) else flowOf(emptyList())
-        ) { scheduled, remote ->
-            withContext(Dispatchers.Default) {
-                val scheduledModels = scheduled.map { it.toUiModel(isRemote = false) }
-                val remoteModels = remote.map { 
-                    it.isRemote = true
-                    it.toUiModel(isRemote = true) 
+        draftDao.getUnifiedHistory(pk, if (isEnabled) 1 else 0)
+            .debounce(if (HistorySyncManager.isSyncing.value) 500 else 0)
+            .map { list ->
+                try {
+                    withContext(Dispatchers.Default) {
+                        list.map { getMemoizedUiModel(it, it.isRemoteCache) }.filterNotNull()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ProcessTextViewModel", "Error processing history", e)
+                    emptyList<HistoryUiModel>()
                 }
-                
-                (scheduledModels + remoteModels)
-                    .distinctBy { it.id }
-                    .sortedByDescending { it.timestamp }
             }
-        }
-    }.conflate()
-     .flowOn(Dispatchers.Default)
+            .onStart { emit(emptyList()) }
+    }.catch { e ->
+        android.util.Log.e("ProcessTextViewModel", "History flow crashed", e)
+        emit(emptyList()) 
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     // Hidden Hashtags state (per user)
     private val _hiddenHashtagsTrigger = MutableStateFlow(0)
@@ -517,37 +529,59 @@ class ProcessTextViewModel : ViewModel() {
         _hiddenHashtagsTrigger.value++
     }
 
-    // Derived Hashtag Counts Flow (Returns all top tags, UI will handle mode-based visibility)
-    val topHashtags: StateFlow<List<Pair<String, Int>>> = processedHistoryItems
-        .map { items ->
-            withContext(Dispatchers.Default) {
-                val tagMap = mutableMapOf<String, Int>()
-                val hashtagRegex = "#([a-zA-Z0-9_]+)".toRegex()
+    // Derived Hashtag Counts Flow (Throttled Background Job to prevent UI lag)
+    private val _topHashtags = MutableStateFlow<List<Pair<String, Int>>>(emptyList())
+    val topHashtags: StateFlow<List<Pair<String, Int>>> = _topHashtags.asStateFlow()
+
+    init {
+        // Kick off hashtag counting in background, throttled
+        viewModelScope.launch {
+            processedHistoryItems.collectLatest { items ->
+                if (items.isEmpty()) {
+                    _topHashtags.value = emptyList()
+                    return@collectLatest
+                }
                 
-                items.forEach { item ->
-                    hashtagRegex.findAll(item.contentSnippet).forEach { match ->
-                        val tag = match.groupValues[1].lowercase()
-                        tagMap[tag] = tagMap.getOrDefault(tag, 0) + 1
-                    }
+                // Allow the list to render first
+                delay(1000)
+                
+                withContext(Dispatchers.Default) {
+                    val tagMap = mutableMapOf<String, Int>()
+                    val hashtagRegex = "#([a-zA-Z0-9_]+)".toRegex()
                     
-                    item.originalEventJson?.let { 
-                        try {
-                            val tags = JSONObject(it).optJSONArray("tags")
-                            if (tags != null) {
-                                for (i in 0 until tags.length()) {
-                                    val tagArr = tags.optJSONArray(i)
-                                    if (tagArr != null && tagArr.length() >= 2 && tagArr.getString(0) == "t") {
-                                        val tag = tagArr.getString(1).lowercase()
-                                        tagMap[tag] = tagMap.getOrDefault(tag, 0) + 1
+                    items.forEach { item ->
+                        // Fast path: Extract from original JSON if possible
+                        var foundInJson = false
+                        item.originalEventJson?.let { 
+                            try {
+                                val obj = JSONObject(it)
+                                val tags = obj.optJSONArray("tags")
+                                if (tags != null) {
+                                    for (i in 0 until tags.length()) {
+                                        val tagArr = tags.optJSONArray(i)
+                                        if (tagArr != null && tagArr.length() >= 2 && tagArr.getString(0) == "t") {
+                                            val tag = tagArr.getString(1).lowercase()
+                                            tagMap[tag] = tagMap.getOrDefault(tag, 0) + 1
+                                            foundInJson = true
+                                        }
                                     }
                                 }
+                            } catch (_: Exception) {}
+                        }
+                        
+                        // Fallback: Regex scan
+                        if (!foundInJson) {
+                            hashtagRegex.findAll(item.contentSnippet).forEach { match ->
+                                val tag = match.groupValues[1].lowercase()
+                                tagMap[tag] = tagMap.getOrDefault(tag, 0) + 1
                             }
-                        } catch (_: Exception) {}
+                        }
                     }
+                    _topHashtags.value = tagMap.toList().sortedByDescending { it.second }.take(30)
                 }
-                tagMap.toList().sortedByDescending { it.second }.take(30)
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        }
+    }
 
     // Stage 2: Instant UI Filter - reactive to search and chips
     @OptIn(ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
@@ -560,9 +594,11 @@ class ProcessTextViewModel : ViewModel() {
         if (query.isBlank() && filters.isEmpty() && selectedTags.isEmpty()) return@combine items
         
         withContext(Dispatchers.Default) {
+            val queryLc = query.lowercase()
+            val selectedTagsLc = selectedTags.map { it.lowercase() }
+
             items.filter { item ->
-                val text = item.contentSnippet.lowercase()
-                val matchesSearch = query.isBlank() || item.contentSnippet.contains(query, ignoreCase = true)
+                val matchesSearch = queryLc.isBlank() || item.contentSnippet.contains(queryLc, ignoreCase = true)
                 
                 val matchesTypeFilter = if (filters.none { it in listOf(HistoryFilter.NOTE, HistoryFilter.HIGHLIGHT, HistoryFilter.REPOST, HistoryFilter.QUOTE, HistoryFilter.MEDIA, HistoryFilter.ARTICLE) }) {
                     true
@@ -583,6 +619,7 @@ class ProcessTextViewModel : ViewModel() {
                 val matchesMediaFilter = if (filters.none { it in listOf(HistoryFilter.HAS_MEDIA, HistoryFilter.IMAGE, HistoryFilter.GIF, HistoryFilter.VIDEO, HistoryFilter.YOUTUBE, HistoryFilter.WEB) }) {
                     true
                 } else {
+                    val snippetLc = item.contentSnippet.lowercase()
                     val mediaUrls = item.mediaJson?.let { 
                         try { 
                             val arr = JSONArray(it)
@@ -590,26 +627,26 @@ class ProcessTextViewModel : ViewModel() {
                         } catch (_: Exception) { emptyList<String>() }
                     } ?: emptyList()
                     
-                    val isYouTube = text.contains("youtube.com") || text.contains("youtu.be")
+                    val isYouTube = snippetLc.contains("youtube.com") || snippetLc.contains("youtu.be")
                     
                     val hasAnyMedia = mediaUrls.isNotEmpty() || 
-                                     text.contains(".jpg") || text.contains(".jpeg") || 
-                                     text.contains(".png") || text.contains(".webp") || 
-                                     text.contains(".gif") || text.contains(".mp4") || 
-                                     text.contains(".mov") || text.contains(".webm") ||
+                                     snippetLc.contains(".jpg") || snippetLc.contains(".jpeg") || 
+                                     snippetLc.contains(".png") || snippetLc.contains(".webp") || 
+                                     snippetLc.contains(".gif") || snippetLc.contains(".mp4") || 
+                                     snippetLc.contains(".mov") || snippetLc.contains(".webm") ||
                                      isYouTube
 
                     filters.any { filter ->
                         when (filter) {
                             HistoryFilter.HAS_MEDIA -> hasAnyMedia
                             HistoryFilter.IMAGE -> mediaUrls.any { it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".png") || it.endsWith(".webp") } ||
-                                                  text.contains(".jpg") || text.contains(".jpeg") || text.contains(".png") || text.contains(".webp")
-                            HistoryFilter.GIF -> mediaUrls.any { it.endsWith(".gif") } || text.contains(".gif")
+                                                  snippetLc.contains(".jpg") || snippetLc.contains(".jpeg") || snippetLc.contains(".png") || snippetLc.contains(".webp")
+                            HistoryFilter.GIF -> mediaUrls.any { it.endsWith(".gif") } || snippetLc.contains(".gif")
                             HistoryFilter.VIDEO -> mediaUrls.any { it.endsWith(".mp4") || it.endsWith(".mov") || it.endsWith(".webm") } ||
-                                                  text.contains(".mp4") || text.contains(".mov") || text.contains(".webm")
+                                                  snippetLc.contains(".mp4") || snippetLc.contains(".mov") || snippetLc.contains(".webm")
                             HistoryFilter.YOUTUBE -> isYouTube
                             HistoryFilter.WEB -> {
-                                val hasUrlInText = text.contains("http://") || text.contains("https://")
+                                val hasUrlInText = snippetLc.contains("http://") || snippetLc.contains("https://")
                                 val hasUrlInSource = item.sourceUrl?.startsWith("http") == true
                                 
                                 val matchesKnownMedia = (hasAnyMedia && !isYouTube) || 
@@ -622,18 +659,18 @@ class ProcessTextViewModel : ViewModel() {
                     }
                 }
 
-                val matchesHashtagFilter = if (selectedTags.isEmpty()) {
+                val matchesHashtagFilter = if (selectedTagsLc.isEmpty()) {
                     true
                 } else {
-                    // "Either" logic: item must contain at least one of the selected hashtags
-                    selectedTags.any { tag -> text.contains("#$tag", ignoreCase = true) }
+                    val snippetLc = item.contentSnippet.lowercase()
+                    selectedTagsLc.any { tag -> snippetLc.contains("#$tag") }
                 }
 
                 matchesSearch && matchesTypeFilter && matchesMediaFilter && matchesHashtagFilter
             }
         }
     }.flowOn(Dispatchers.Default)
-     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+     .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     var hasReachedEndOfRemoteHistory by mutableStateOf(false)
     private var currentSearchJob: Job? = null
@@ -641,7 +678,7 @@ class ProcessTextViewModel : ViewModel() {
 
     fun forceFullSync() {
         val pk = pubkey ?: return
-        HistorySyncManager.startFullSync(pk, relayManager, draftDao)
+        HistorySyncManager.forceWipeAndSync(pk, relayManager, draftDao)
     }
 
     fun fetchRemoteHistory() {
@@ -679,11 +716,11 @@ class ProcessTextViewModel : ViewModel() {
                     for (draft in noteChannel) {
                         batch.add(draft)
                         if (batch.size >= 50) {
-                            draftDao.syncRemoteNotes(batch.toList())
+                            draftDao.syncRemoteNotes(batch.toList(), currentPk)
                             batch.clear()
                         }
                     }
-                    if (batch.isNotEmpty()) draftDao.syncRemoteNotes(batch)
+                    if (batch.isNotEmpty()) draftDao.syncRemoteNotes(batch, currentPk)
                 }
 
                 relayManager.fetchHistoryFromRelays(
@@ -740,34 +777,55 @@ class ProcessTextViewModel : ViewModel() {
     var batchCompressionLevel by mutableStateOf<Int?>(null)
 
     init {
-        isOnboarded = settingsRepository.isOnboarded()
+        // Multi-user isolation: Clean up any notes without an assigned pubkey
+        viewModelScope.launch(Dispatchers.IO) {
+            draftDao.deleteOrphanNotes()
+        }
+
+        val savedPubkey = prefs.getString("pubkey", null)
+        pubkey = savedPubkey
+        
+        isOnboarded = settingsRepository.isOnboarded(savedPubkey)
         isSchedulingEnabled = settingsRepository.isSchedulingEnabled()
         batchCompressionLevel = settingsRepository.getCompressionLevel()
         
-        if (isOnboarded) {
-            val savedPubkey = prefs.getString("pubkey", null)
+        knownAccounts.addAll(settingsRepository.getKnownAccounts())
+        
+        // Ensure known metadata is available in the cache immediately
+        knownAccounts.forEach { account ->
+            if (account.name != null || account.pictureUrl != null) {
+                usernameCache[account.pubkey] = UserProfile(account.name, account.pictureUrl, createdAt = account.createdAt)
+            }
+        }
+        
+        if (savedPubkey != null) {
+            val account = knownAccounts.find { it.pubkey == savedPubkey }
+            npub = account?.npub ?: prefs.getString("npub", null)
+            signerPackageName = account?.signerPackage ?: prefs.getString("signer_package", null)
+            
+            // Priority: Known Account Cache -> Prefs Fallback (pubkey-specific)
+            userProfile = account?.let { UserProfile(it.name, it.pictureUrl, createdAt = it.createdAt) }
+                ?: run {
+                    val savedName = prefs.getString("${savedPubkey}_user_name", null)
+                    val savedPic = prefs.getString("${savedPubkey}_user_pic", null)
+                    val savedTime = prefs.getLong("${savedPubkey}_user_created_at", 0L)
+                    if (savedName != null || savedPic != null) UserProfile(savedName, savedPic, createdAt = savedTime) else null
+                }
+            
             isFullHistoryEnabled = settingsRepository.isFullHistoryEnabled(savedPubkey)
             hasReachedEndOfRemoteHistory = settingsRepository.isHistorySyncCompleted(savedPubkey)
-
-            if (savedPubkey != null) {
-                pubkey = savedPubkey
-                npub = prefs.getString("npub", null)
-                signerPackageName = prefs.getString("signer_package", null)
-                
-                val savedName = prefs.getString("user_name", null)
-                val savedPic = prefs.getString("user_pic", null)
-                val savedTime = prefs.getLong("user_created_at", 0L)
-                if (savedName != null || savedPic != null) {
-                    userProfile = UserProfile(savedName, savedPic, createdAt = savedTime)
-                }
-                
+            
+            if (isOnboarded) {
                 refreshUserProfile()
+                // Automatic incremental sync on start
+                HistorySyncManager.startDeltaSync(savedPubkey, relayManager, draftDao)
+            } else {
+                currentOnboardingStep = OnboardingStep.SYNCING
             }
         } else {
             currentOnboardingStep = OnboardingStep.WELCOME
         }
 
-        knownAccounts.addAll(settingsRepository.getKnownAccounts())
         blossomServers = settingsRepository.getBlossomServers(pubkey)
         followedPubkeys = settingsRepository.getFollowedPubkeys()
         
@@ -792,9 +850,16 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun login(hexKey: String, npubKey: String?, pkgName: String?) {
+        // Clear old user state immediately to avoid desync
+        pubkey = null
+        userProfile = null
+        
         pubkey = hexKey
         npub = npubKey
         signerPackageName = pkgName
+        
+        // Re-trigger onboarding flow for the new user to fetch Kind 0 and 10063
+        isOnboarded = false
         currentOnboardingStep = OnboardingStep.SYNCING
         isSyncingServers = true
         
@@ -802,10 +867,11 @@ class ProcessTextViewModel : ViewModel() {
             .putString("pubkey", hexKey)
             .putString("npub", npubKey)
             .putString("signer_package", pkgName)
+            .putBoolean("is_onboarded", false)
             .apply()
 
         val existingIndex = knownAccounts.indexOfFirst { it.pubkey == hexKey }
-        val newAccount = Account(hexKey, npubKey, pkgName, userProfile?.name, userProfile?.pictureUrl)
+        val newAccount = Account(hexKey, npubKey, pkgName, null, null)
         if (existingIndex >= 0) {
             knownAccounts[existingIndex] = newAccount
         } else {
@@ -816,36 +882,61 @@ class ProcessTextViewModel : ViewModel() {
         refreshUserProfile()
     }
 
+    fun logout() {
+        val pk = pubkey
+        pubkey = null
+        npub = null
+        signerPackageName = null
+        userProfile = null
+        isOnboarded = false
+        currentOnboardingStep = OnboardingStep.WELCOME
+        
+        prefs.edit()
+            .remove("pubkey")
+            .remove("npub")
+            .remove("signer_package")
+            .apply()
+        
+        // Keep known accounts but clear current session onboarding
+        if (pk != null) settingsRepository.setOnboarded(false, pk)
+    }
+
     fun switchUser(hexKey: String) {
         if (pubkey == hexKey) return
         
         HistorySyncManager.reset()
         
+        // Clear search and filters to prevent stale data visibility
+        searchQuery = ""
+        activeHistoryFilters.clear()
+        activeHashtags.clear()
+        
         val account = knownAccounts.find { it.pubkey == hexKey }
         
+        // Reset state for new user
         pubkey = hexKey
         npub = account?.npub
         signerPackageName = account?.signerPackage
-        userProfile = account?.let { UserProfile(it.name, it.pictureUrl, createdAt = it.createdAt) } ?: usernameCache[hexKey]
+        userProfile = account?.let { UserProfile(it.name, it.pictureUrl, createdAt = it.createdAt) }
+        
+        // Check if this user was already onboarded
+        isOnboarded = settingsRepository.isOnboarded(hexKey)
+        if (!isOnboarded) {
+            currentOnboardingStep = OnboardingStep.SYNCING
+        }
         
         prefs.edit()
             .putString("pubkey", hexKey)
             .putString("npub", account?.npub)
             .putString("signer_package", account?.signerPackage)
-            .putString("user_name", userProfile?.name)
-            .putString("user_pic", userProfile?.pictureUrl)
-            .putLong("user_created_at", userProfile?.createdAt ?: 0L)
+            .putString("${hexKey}_user_name", userProfile?.name)
+            .putString("${hexKey}_user_pic", userProfile?.pictureUrl)
+            .putLong("${hexKey}_user_created_at", userProfile?.createdAt ?: 0L)
             .apply()
         
         blossomServers = settingsRepository.getBlossomServers(hexKey)
         isFullHistoryEnabled = settingsRepository.isFullHistoryEnabled(hexKey)
         hasReachedEndOfRemoteHistory = settingsRepository.isHistorySyncCompleted(hexKey)
-        
-        prefs.edit()
-            .putString("pubkey", hexKey)
-            .putString("npub", npub)
-            .putString("signer_package", signerPackageName)
-            .apply()
         
         refreshUserProfile()
     }
@@ -854,62 +945,80 @@ class ProcessTextViewModel : ViewModel() {
     private fun refreshUserProfile() {
         if (!isOnboarded && currentOnboardingStep != OnboardingStep.SYNCING) return
         val pk = pubkey ?: return
-        viewModelScope.launch {
+        
+        userRefreshJob?.cancel()
+        userRefreshJob = viewModelScope.launch {
             try {
                 val profile = relayManager.fetchUserProfile(pk)
+                // Verification: Ensure the user hasn't switched while we were fetching the profile
+                if (pubkey != pk) return@launch
+
                 if (profile != null) {
                     val currentTs = userProfile?.createdAt ?: 0L
                     if (profile.createdAt > currentTs) {
                         userProfile = profile
                         prefs.edit()
-                            .putString("user_name", profile.name)
-                            .putString("user_pic", profile.pictureUrl)
-                            .putLong("user_created_at", profile.createdAt)
+                            .putString("${pk}_user_name", profile.name)
+                            .putString("${pk}_user_pic", profile.pictureUrl)
+                            .putLong("${pk}_user_created_at", profile.createdAt)
                             .apply()
                         
                         val index = knownAccounts.indexOfFirst { it.pubkey == pk }
-                        if (index >= 0) {
-                            val updated = knownAccounts[index].copy(
+                        val updated = if (index >= 0) {
+                            knownAccounts[index].copy(
                                 name = profile.name, 
                                 pictureUrl = profile.pictureUrl,
                                 createdAt = profile.createdAt
                             )
-                            knownAccounts[index] = updated
-                            settingsRepository.setKnownAccounts(knownAccounts.toList())
+                        } else {
+                            Account(pk, npub, signerPackageName, profile.name, profile.pictureUrl, profile.createdAt)
                         }
+                        
+                        if (index >= 0) knownAccounts[index] = updated else knownAccounts.add(updated)
+                        settingsRepository.setKnownAccounts(knownAccounts.toList())
                     }
                 }
                 
-                syncBlossomServers()
+                syncBlossomServers(pk)
                 
                 val userRelays = relayManager.fetchRelayList(pk)
-                
+                if (pubkey != pk) return@launch
+
                 val follows = relayManager.fetchContactList(pk, userRelays)
+                if (pubkey != pk) return@launch
+                
                 followedPubkeys = follows
                 settingsRepository.setFollowedPubkeys(follows)
                 
                 if (follows.isNotEmpty()) {
                     val followsList = follows.toList()
                     relayManager.fetchUserProfiles(followsList) { p, profile ->
-                        usernameCache[p] = profile
+                        if (pubkey == pk) { // Only update cache if we are still on the same user
+                            usernameCache[p] = profile
+                        }
                     }
-                    settingsRepository.setUsernameCache(usernameCache.toMap())
+                    if (pubkey == pk) {
+                        settingsRepository.setUsernameCache(usernameCache.toMap())
+                    }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("ProcessTextViewModel", "Failed to refresh user profile", e)
             } finally {
-                fetchRemoteHistory()
+                if (pubkey == pk) {
+                    fetchRemoteHistory()
+                }
             }
         }
     }
 
-    fun syncBlossomServers() {
-        val pk = pubkey ?: return
+    fun syncBlossomServers(pk: String) {
         viewModelScope.launch {
             try {
                 isSyncingServers = true
                 val discoveredUrls = relayManager.fetchBlossomServerList(pk)
                 
+                if (pubkey != pk) return@launch
+
                 val existingLocal = settingsRepository.getBlossomServers(pk).associate { it.url to it.enabled }
                 
                 if (discoveredUrls.isNotEmpty()) {
@@ -919,27 +1028,37 @@ class ProcessTextViewModel : ViewModel() {
                         BlossomServer(cleanUrl, isEnabled)
                     }
                     
-                    blossomServers = newServers
-                    saveServersAndContinue(newServers)
+                    if (pubkey == pk) {
+                        blossomServers = newServers
+                        saveServersAndContinue(newServers, pk)
+                    }
                 } else {
-                    currentOnboardingStep = OnboardingStep.SERVER_SELECTION
+                    if (pubkey == pk) {
+                        currentOnboardingStep = OnboardingStep.SERVER_SELECTION
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
-                isSyncingServers = false
+                if (pubkey == pk) {
+                    isSyncingServers = false
+                }
             }
         }
     }
 
-    fun saveServersAndContinue(servers: List<BlossomServer>) {
-        settingsRepository.setBlossomServers(servers, pubkey)
-        blossomServers = servers
-        currentOnboardingStep = OnboardingStep.SCHEDULING_CONFIG
+    fun saveServersAndContinue(servers: List<BlossomServer>, pk: String? = null) {
+        val targetPk = pk ?: pubkey
+        settingsRepository.setBlossomServers(servers, targetPk)
+        if (pubkey == targetPk) {
+            blossomServers = servers
+            currentOnboardingStep = OnboardingStep.SCHEDULING_CONFIG
+        }
     }
 
     fun completeOnboarding() {
-        settingsRepository.setOnboarded(true)
+        val pk = pubkey
+        settingsRepository.setOnboarded(true, pk)
         isOnboarded = true
         refreshUserProfile()
     }
@@ -1322,8 +1441,9 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun clearScheduledHistory() {
+        val pk = pubkey ?: return
         viewModelScope.launch {
-            draftDao.deleteCompletedScheduled()
+            draftDao.deleteCompletedScheduled(pk)
         }
     }
     var pendingAuthServerUrl: String? = null

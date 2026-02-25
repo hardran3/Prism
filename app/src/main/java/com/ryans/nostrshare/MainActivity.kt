@@ -219,6 +219,8 @@ class MainActivity : ComponentActivity() {
                                                 ) {
                                                     UserAvatar(
                                                         pictureUrl = viewModel.userProfile?.pictureUrl,
+                                                        pubkey = viewModel.pubkey,
+                                                        vm = viewModel,
                                                         size = 32.dp
                                                     )
                                                 }

@@ -5,17 +5,28 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DraftDao {
-    @Query("SELECT * FROM drafts WHERE isScheduled = 0 AND isAutoSave = 0 AND isRemoteCache = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY lastEdited DESC")
+    @Query("SELECT * FROM drafts WHERE isScheduled = 0 AND isAutoSave = 0 AND isRemoteCache = 0 AND pubkey = :pubkey ORDER BY lastEdited DESC")
     fun getAllDrafts(pubkey: String?): Flow<List<Draft>>
 
-    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 0 AND isRemoteCache = 0 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY isOfflineRetry DESC, scheduledAt ASC")
+    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 0 AND isRemoteCache = 0 AND pubkey = :pubkey ORDER BY isOfflineRetry DESC, scheduledAt ASC")
     fun getAllScheduled(pubkey: String?): Flow<List<Draft>>
 
-    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 1 AND (pubkey = :pubkey OR pubkey IS NULL) ORDER BY scheduledAt DESC")
+    @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 1 AND pubkey = :pubkey ORDER BY scheduledAt DESC")
     fun getScheduledHistory(pubkey: String?): Flow<List<Draft>>
     
     @Query("SELECT * FROM drafts WHERE isRemoteCache = 1 AND isScheduled = 0 AND pubkey = :pubkey ORDER BY actualPublishedAt DESC")
     fun getRemoteHistory(pubkey: String): Flow<List<Draft>>
+
+    @Query("""
+        SELECT * FROM drafts 
+        WHERE pubkey = :pubkey 
+        AND (
+            (isScheduled = 1 AND isCompleted = 1) 
+            OR (:includeRemote = 1 AND isRemoteCache = 1 AND isScheduled = 0)
+        )
+        ORDER BY CASE WHEN isRemoteCache = 1 THEN IFNULL(actualPublishedAt, lastEdited) ELSE IFNULL(scheduledAt, lastEdited) END DESC
+    """)
+    fun getUnifiedHistory(pubkey: String, includeRemote: Int): Flow<List<Draft>>
 
     @Query("SELECT publishedEventId FROM drafts WHERE isRemoteCache = 1 AND pubkey = :pubkey AND publishedEventId IS NOT NULL")
     suspend fun getAllRemoteIds(pubkey: String): List<String>
@@ -38,13 +49,13 @@ interface DraftDao {
     @Query("SELECT COUNT(*) FROM drafts WHERE isScheduled = 1 AND isCompleted = 0")
     suspend fun getScheduledCount(): Int
 
-    @Query("DELETE FROM drafts WHERE isScheduled = 1 AND isCompleted = 1")
-    suspend fun deleteCompletedScheduled()
+    @Query("DELETE FROM drafts WHERE isScheduled = 1 AND isCompleted = 1 AND pubkey = :pubkey")
+    suspend fun deleteCompletedScheduled(pubkey: String)
 
-    @Query("SELECT * FROM drafts WHERE isAutoSave = 1 AND (pubkey = :pubkey OR pubkey IS NULL) LIMIT 1")
+    @Query("SELECT * FROM drafts WHERE isAutoSave = 1 AND pubkey = :pubkey LIMIT 1")
     suspend fun getAutoSaveDraft(pubkey: String?): Draft?
 
-    @Query("DELETE FROM drafts WHERE isAutoSave = 1 AND (pubkey = :pubkey OR pubkey IS NULL)")
+    @Query("DELETE FROM drafts WHERE isAutoSave = 1 AND pubkey = :pubkey")
     suspend fun deleteAutoSaveDraft(pubkey: String?)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -54,14 +65,15 @@ interface DraftDao {
     suspend fun insertDrafts(drafts: List<Draft>)
 
     @Transaction
-    suspend fun syncRemoteNotes(remoteNotes: List<Draft>) {
+    suspend fun syncRemoteNotes(remoteNotes: List<Draft>, syncPubkey: String) {
         for (remote in remoteNotes) {
             val eventId = remote.publishedEventId ?: continue
-            val existing = getDraftByEventId(eventId)
+            val existing = getDraftByEventId(eventId, syncPubkey)
             if (existing != null) {
                 // Update remote fields while preserving local flags
                 updateRemoteMetadata(
                     id = existing.id,
+                    pubkey = syncPubkey,
                     actualPublishedAt = remote.actualPublishedAt ?: existing.actualPublishedAt,
                     previewTitle = remote.previewTitle ?: existing.previewTitle,
                     previewDescription = remote.previewDescription ?: existing.previewDescription,
@@ -75,8 +87,11 @@ interface DraftDao {
         }
     }
 
-    @Query("SELECT * FROM drafts WHERE publishedEventId = :eventId LIMIT 1")
-    suspend fun getDraftByEventId(eventId: String): Draft?
+    @Query("DELETE FROM drafts WHERE pubkey IS NULL")
+    suspend fun deleteOrphanNotes()
+
+    @Query("SELECT * FROM drafts WHERE publishedEventId = :eventId AND pubkey = :pubkey LIMIT 1")
+    suspend fun getDraftByEventId(eventId: String, pubkey: String): Draft?
 
     @Query("""
         UPDATE drafts SET 
@@ -87,10 +102,11 @@ interface DraftDao {
             previewSiteName = :previewSiteName,
             mediaJson = :mediaJson,
             isRemoteCache = 1
-        WHERE id = :id
+        WHERE id = :id AND pubkey = :pubkey
     """)
     suspend fun updateRemoteMetadata(
         id: Int, 
+        pubkey: String,
         actualPublishedAt: Long?, 
         previewTitle: String?, 
         previewDescription: String?, 

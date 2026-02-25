@@ -282,10 +282,13 @@ class ProcessTextActivity : ComponentActivity() {
                         navigationIcon = {
                             Box {
                                 IconButton(modifier = Modifier.padding(start = 8.dp).size(48.dp), onClick = { showAccountMenu = !showAccountMenu }) {
-                                    UserAvatar(
-                                        pictureUrl = vm.userProfile?.pictureUrl,
-                                        size = 48.dp
-                                    )
+                                                                    UserAvatar(
+                                                                        pictureUrl = vm.userProfile?.pictureUrl,
+                                                                        pubkey = vm.pubkey,
+                                                                        vm = vm,
+                                                                        size = 48.dp
+                                                                    )
+                                    
                                 }
                                 AccountSelectorMenu(expanded = showAccountMenu, onDismiss = { showAccountMenu = false }, vm = vm, onAddAccount = { showAccountMenu = false; getPublicKeyLauncher.launch(GetPublicKeyContract.Input(permissions = listOf(Permission.signEvent(9802), Permission.signEvent(1), Permission.signEvent(30023), Permission.signEvent(20), Permission.signEvent(22)))) }, onSwitchAccount = { pk -> showAccountMenu = false; vm.switchUser(pk) })
                             }
@@ -799,5 +802,5 @@ fun SharingDialog(vm: ProcessTextViewModel, onDismiss: () -> Unit) {
 
 @Composable
 fun UserSearchDialog(vm: ProcessTextViewModel, onDismiss: () -> Unit, onUserSelected: (String) -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Add User") }, text = { Column { OutlinedTextField(value = vm.userSearchQuery, onValueChange = { vm.performUserSearch(it) }, label = { Text("Search by name or npub") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)); Spacer(Modifier.height(16.dp)); if (vm.isSearchingUsers) LinearProgressIndicator(Modifier.fillMaxWidth()); androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) { items(vm.userSearchResults.size) { i -> val (pk, p) = vm.userSearchResults[i]; Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { onUserSelected(pk) }, verticalAlignment = Alignment.CenterVertically) { UserAvatar(pictureUrl = p.pictureUrl, size = 40.dp); Spacer(Modifier.width(12.dp)); Column { Row(verticalAlignment = Alignment.CenterVertically) { Text(p.name ?: pk.take(8), fontWeight = FontWeight.Bold); if (vm.followedPubkeys.contains(pk)) { Spacer(Modifier.width(4.dp)); Icon(Icons.Default.Check, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) } }; Text(try { NostrUtils.pubkeyToNpub(pk) } catch (_: Exception) { pk.take(16) + "..." }, style = MaterialTheme.typography.labelSmall) } } } } } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Add User") }, text = { Column { OutlinedTextField(value = vm.userSearchQuery, onValueChange = { vm.performUserSearch(it) }, label = { Text("Search by name or npub") }, modifier = Modifier.fillMaxWidth(), singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)); Spacer(Modifier.height(16.dp)); if (vm.isSearchingUsers) LinearProgressIndicator(Modifier.fillMaxWidth()); androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) { items(vm.userSearchResults.size) { i -> val (pk, p) = vm.userSearchResults[i]; Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { onUserSelected(pk) }, verticalAlignment = Alignment.CenterVertically) { UserAvatar(pictureUrl = p.pictureUrl, pubkey = pk, vm = vm, size = 40.dp); Spacer(Modifier.width(12.dp)); Column { Row(verticalAlignment = Alignment.CenterVertically) { Text(p.name ?: pk.take(8), fontWeight = FontWeight.Bold); if (vm.followedPubkeys.contains(pk)) { Spacer(Modifier.width(4.dp)); Icon(Icons.Default.Check, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) } }; Text(try { NostrUtils.pubkeyToNpub(pk) } catch (_: Exception) { pk.take(16) + "..." }, style = MaterialTheme.typography.labelSmall) } } } } } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
 }

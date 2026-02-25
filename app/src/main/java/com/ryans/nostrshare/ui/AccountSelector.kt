@@ -49,6 +49,8 @@ fun AccountSelectorMenu(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         UserAvatar(
                                             pictureUrl = account.pictureUrl,
+                                            pubkey = account.pubkey,
+                                            vm = vm,
                                             size = 32.dp
                                         )
                                         Spacer(Modifier.width(12.dp))
@@ -83,6 +85,8 @@ fun AccountSelectorMenu(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             UserAvatar(
                                 pictureUrl = account.pictureUrl,
+                                pubkey = account.pubkey,
+                                vm = vm,
                                 size = 32.dp
                             )
                             Spacer(Modifier.width(12.dp))

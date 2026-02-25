@@ -18,9 +18,13 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.ryans.nostrshare.NostrShareApp
 
+import com.ryans.nostrshare.ProcessTextViewModel
+
 @Composable
 fun UserAvatar(
     pictureUrl: String?,
+    pubkey: String? = null,
+    vm: ProcessTextViewModel? = null,
     size: Dp = 32.dp,
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
@@ -28,10 +32,18 @@ fun UserAvatar(
 ) {
     val avatarLoader = NostrShareApp.getInstance().avatarImageLoader
     
+    // Attempt secondary resolution if pictureUrl is missing or blank
+    val resolvedUrl = if (!pictureUrl.isNullOrBlank()) pictureUrl else {
+        if (pubkey != null && vm != null) {
+            vm.knownAccounts.find { it.pubkey == pubkey }?.pictureUrl 
+                ?: vm.usernameCache[pubkey]?.pictureUrl
+        } else null
+    }
+
     Box(modifier = modifier.size(size)) {
-        if (!pictureUrl.isNullOrBlank()) {
+        if (!resolvedUrl.isNullOrBlank()) {
             AsyncImage(
-                model = pictureUrl,
+                model = resolvedUrl,
                 contentDescription = contentDescription,
                 imageLoader = avatarLoader,
                 modifier = Modifier

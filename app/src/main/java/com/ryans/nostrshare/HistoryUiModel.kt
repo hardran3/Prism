@@ -32,61 +32,10 @@ data class HistoryUiModel(
     val articleTitle: String? = null,
     val articleSummary: String? = null,
     val articleIdentifier: String? = null,
-    val publishedEventId: String? = null,
-    val nostrEvent: JSONObject? = null,
-    val targetLink: String? = null,
-    val segments: List<ContentSegment> = emptyList()
+    val publishedEventId: String? = null
 )
 
 fun Draft.toUiModel(isRemote: Boolean): HistoryUiModel {
-    val effectiveKind = getEffectivePostKind()
-    
-    // Proactive Target Detection
-    var targetJson: JSONObject? = null
-    var detectedLink: String? = null
-
-    when (effectiveKind) {
-        PostKind.REPOST -> {
-            // Priority 1: originalEventJson
-            targetJson = originalEventJson?.let { try { JSONObject(it) } catch (_: Exception) { null } }
-            
-            // Priority 2: Parse content if it's JSON (Remote reposts often store target here)
-            if (targetJson == null && content.trim().startsWith("{")) {
-                targetJson = try { JSONObject(content) } catch (_: Exception) { null }
-            }
-            
-            // Priority 3: sourceUrl pointer
-            if (sourceUrl.isNotBlank()) {
-                detectedLink = sourceUrl.removePrefix("nostr:")
-            }
-        }
-        PostKind.QUOTE -> {
-            // Scan for the first nostr: link to use as the specific quote target
-            val regex = "(nostr:)?(nevent1|note1|naddr1)[a-z0-9]+".toRegex(RegexOption.IGNORE_CASE)
-            val match = regex.find(content) ?: sourceUrl.let { regex.find(it) }
-            detectedLink = match?.value?.removePrefix("nostr:")
-            
-            // Still check originalEventJson for a cache of the quoted note
-            targetJson = originalEventJson?.let { try { JSONObject(it) } catch (_: Exception) { null } }
-        }
-        else -> {
-            // Standard fallback for other types
-            targetJson = originalEventJson?.let { try { JSONObject(it) } catch (_: Exception) { null } }
-        }
-    }
-
-    // CRITICAL: Prevent self-previewing
-    val selfId = publishedEventId
-    if (selfId != null) {
-        if (targetJson?.optString("id") == selfId) {
-            targetJson = null
-        }
-        val entity = detectedLink?.let { com.ryans.nostrshare.NostrUtils.findNostrEntity(it) }
-        if (entity?.id == selfId) {
-            detectedLink = null
-        }
-    }
-    
     return HistoryUiModel(
         id = if (isRemote) (publishedEventId ?: id.toString()) else "local_$id",
         localId = id,
@@ -113,8 +62,6 @@ fun Draft.toUiModel(isRemote: Boolean): HistoryUiModel {
         articleTitle = articleTitle,
         articleSummary = articleSummary,
         articleIdentifier = articleIdentifier,
-        publishedEventId = publishedEventId,
-        nostrEvent = targetJson,
-        targetLink = detectedLink
+        publishedEventId = publishedEventId
     )
 }

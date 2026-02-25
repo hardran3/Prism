@@ -16,6 +16,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import android.util.Log
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+
 class RelayManager(
     private val client: OkHttpClient,
     private val settingsRepository: SettingsRepository
@@ -194,6 +197,7 @@ class RelayManager(
         Log.d("RelayManager", "Starting Parallel Fetch from ${userRelays.size} relays since $since")
 
         for (relayUrl in userRelays) {
+            currentCoroutineContext().ensureActive()
             val request = Request.Builder().url(relayUrl).build()
             val listener = object : WebSocketListener() {
                 val subId = UUID.randomUUID().toString()
@@ -265,7 +269,7 @@ class RelayManager(
         Log.d("RelayManager", "Starting fetch from ${targetRelays.size} relays. Search: ${searchTerm ?: "None"}")
 
         targetRelays.forEachIndexed { index, relayUrl -> 
-            if (!this.isActive) return@forEachIndexed
+            currentCoroutineContext().ensureActive()
             
             Log.d("RelayManager", "Syncing relay: $relayUrl")
             onProgress?.invoke(relayUrl, index + 1, targetRelays.size)
@@ -275,7 +279,8 @@ class RelayManager(
             val maxRetries = 3
             var completedRelay = false
 
-            while (!completedRelay && retryCount <= maxRetries && this.isActive) {
+            while (!completedRelay && retryCount <= maxRetries) {
+                currentCoroutineContext().ensureActive()
                 val notesInBatch = java.util.Collections.synchronizedList(mutableListOf<JSONObject>())
                 val syncLatch = CountDownLatch(1)
                 var isRateLimited = false
