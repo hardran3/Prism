@@ -72,7 +72,7 @@ interface DraftDao {
                 updateRemoteMetadata(
                     id = existing.id,
                     pubkey = syncPubkey,
-                    actualPublishedAt = remote.actualPublishedAt ?: existing.actualPublishedAt,
+                    actualPublishedAt = existing.actualPublishedAt ?: remote.actualPublishedAt,
                     previewTitle = remote.previewTitle ?: existing.previewTitle,
                     previewDescription = remote.previewDescription ?: existing.previewDescription,
                     previewImageUrl = remote.previewImageUrl ?: existing.previewImageUrl,
