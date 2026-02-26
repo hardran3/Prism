@@ -247,14 +247,14 @@ class RelayManager(
     suspend fun fetchHistoryFromRelays(
         pubkey: String,
         kinds: List<Int>,
+        relays: List<String>? = null,
         searchTerm: String? = null,
         since: Long? = null,
         until: Long? = null,
         onProgress: ((String, Int, Int) -> Unit)? = null,
         onNote: (JSONObject) -> Unit
     ) = withContext(Dispatchers.IO) {
-        val userRelays = fetchRelayList(pubkey, isRead = true)
-        
+        val userRelays = if (relays.isNullOrEmpty()) fetchRelayList(pubkey, isRead = true) else relays
         val targetRelays = if (searchTerm.isNullOrBlank()) {
             userRelays.distinct()
         } else {
@@ -266,107 +266,84 @@ class RelayManager(
             (userRelays + searchRelays).distinct()
         }
 
-        Log.d("RelayManager", "Starting fetch from ${targetRelays.size} relays. Search: ${searchTerm ?: "None"}")
+        Log.d("RelayManager", "Starting persistent Citrine-style fetch from ${targetRelays.size} relays.")
 
-        targetRelays.forEachIndexed { index, relayUrl -> 
+        targetRelays.forEachIndexed { index, relayUrl ->
             currentCoroutineContext().ensureActive()
-            
             Log.d("RelayManager", "Syncing relay: $relayUrl")
             onProgress?.invoke(relayUrl, index + 1, targetRelays.size)
-            
+
+            val terminalLatch = CountDownLatch(1)
             var currentUntil = until ?: (System.currentTimeMillis() / 1000)
-            var retryCount = 0
-            val maxRetries = 3
-            var completedRelay = false
+            
+            val request = Request.Builder().url(relayUrl).build()
+            val listener = object : WebSocketListener() {
+                private val subId = UUID.randomUUID().toString()
+                private var eventsInBatch = 0
+                private var oldestInBatch = Long.MAX_VALUE
 
-            while (!completedRelay && retryCount <= maxRetries) {
-                currentCoroutineContext().ensureActive()
-                val notesInBatch = java.util.Collections.synchronizedList(mutableListOf<JSONObject>())
-                val syncLatch = CountDownLatch(1)
-                var isRateLimited = false
-                var socketError = false
+                fun sendNextReq(ws: WebSocket) {
+                    eventsInBatch = 0
+                    oldestInBatch = Long.MAX_VALUE
+                    val filter = JSONObject()
+                    filter.put("authors", JSONArray().put(pubkey))
+                    val kindsArray = JSONArray()
+                    kinds.forEach { kindsArray.put(it) }
+                    filter.put("kinds", kindsArray)
+                    filter.put("limit", 500)
+                    filter.put("until", currentUntil)
+                    since?.let { filter.put("since", it) }
+                    searchTerm?.takeIf { it.isNotBlank() }?.let { filter.put("search", it) }
+                    
+                    val req = JSONArray().put("REQ").put(subId).put(filter)
+                    ws.send(req.toString())
+                }
 
-                val request = Request.Builder().url(relayUrl).build()
-                val listener = object : WebSocketListener() {
-                    val subId = UUID.randomUUID().toString()
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    sendNextReq(webSocket)
+                }
 
-                    override fun onOpen(webSocket: WebSocket, response: Response) {
-                        val filter = JSONObject()
-                        val kindsArray = JSONArray()
-                        kinds.forEach { kindsArray.put(it) }
-                        filter.put("authors", JSONArray().put(pubkey))
-                        filter.put("kinds", kindsArray)
-                        filter.put("limit", 500)
-                        since?.let { filter.put("since", it) }
-                        filter.put("until", currentUntil)
-                        searchTerm?.let { if (it.isNotBlank()) filter.put("search", it) }
-                        
-                        Log.d("RelayManager", "REQ [${relayUrl}]: until=${currentUntil}, since=${since ?: "start"}")
-                        val req = JSONArray().put("REQ").put(subId).put(filter)
-                        webSocket.send(req.toString())
-                    }
-
-                    override fun onMessage(webSocket: WebSocket, text: String) {
-                        try {
-                            val json = JSONArray(text)
-                            val type = json.optString(0)
-                            if (type == "EVENT" && json.optString(1) == subId) {
-                                notesInBatch.add(json.getJSONObject(2))
-                            } else if (type == "EOSE" && json.optString(1) == subId) {
-                                syncLatch.countDown()
-                            } else if (type == "CLOSED" && json.optString(1) == subId) {
-                                syncLatch.countDown()
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val json = JSONArray(text)
+                        val type = json.optString(0)
+                        if (type == "EVENT" && json.optString(1) == subId) {
+                            val event = json.getJSONObject(2)
+                            eventsInBatch++
+                            val createdAt = event.optLong("created_at")
+                            if (createdAt < oldestInBatch) oldestInBatch = createdAt
+                            onNote(event)
+                        } else if (type == "EOSE" && json.optString(1) == subId) {
+                            if (eventsInBatch > 0 && oldestInBatch < currentUntil) {
+                                currentUntil = oldestInBatch - 1
+                                sendNextReq(webSocket)
+                            } else {
+                                webSocket.close(1000, "Finished")
+                                terminalLatch.countDown()
                             }
-                        } catch (e: Exception) { 
-                            Log.e("RelayManager", "Error parsing msg from $relayUrl: $text", e)
+                        } else if (type == "CLOSED" && json.optString(1) == subId) {
+                            terminalLatch.countDown()
                         }
-                    }
-                    
-                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                        if (response?.code == 429) {
-                            Log.w("RelayManager", "Rate limited (429) by $relayUrl")
-                            isRateLimited = true
-                        } else {
-                            Log.e("RelayManager", "Socket failure on $relayUrl: ${t.message}")
-                            socketError = true
-                        }
-                        syncLatch.countDown()
-                    }
-                    
-                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                        syncLatch.countDown()
-                    }
+                    } catch (_: Exception) {}
                 }
 
-                val ws = client.newWebSocket(request, listener)
-                try {
-                    val success = syncLatch.await(60, TimeUnit.SECONDS)
-                    if (!success) Log.w("RelayManager", "Timeout waiting for EOSE on $relayUrl")
-                } finally {
-                    ws.close(1000, "Batch Done")
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.w("RelayManager", "Failure on $relayUrl: ${t.message}")
+                    terminalLatch.countDown()
                 }
 
-                if (isRateLimited) {
-                    Log.d("RelayManager", "Waiting 10s for rate limit recovery on $relayUrl...")
-                    kotlinx.coroutines.delay(10000)
-                    retryCount++
-                } else if (socketError) {
-                    retryCount++
-                    Log.d("RelayManager", "Connection issue on $relayUrl, retry $retryCount/$maxRetries")
-                    kotlinx.coroutines.delay(2000L * retryCount)
-                } else if (notesInBatch.isNotEmpty()) {
-                    Log.d("RelayManager", "Received ${notesInBatch.size} notes from $relayUrl")
-                    notesInBatch.forEach { onNote(it) }
-                    
-                    val oldestTimestamp = notesInBatch.minOf { it.optLong("created_at") }
-                    currentUntil = oldestTimestamp - 1
-                    
-                    retryCount = 0
-                    kotlinx.coroutines.delay(1000) 
-                } else {
-                    Log.d("RelayManager", "No more notes found on $relayUrl")
-                    completedRelay = true
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    terminalLatch.countDown()
                 }
+            }
+
+            val ws = client.newWebSocket(request, listener)
+            try {
+                // Wait for the relay sync to complete or timeout
+                val completed = terminalLatch.await(5, TimeUnit.MINUTES)
+                if (!completed) Log.w("RelayManager", "Timed out syncing $relayUrl")
+            } finally {
+                ws.cancel()
             }
         }
     }
@@ -1005,6 +982,84 @@ class RelayManager(
         
         activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
         return@withContext results.toList()
+    }
+
+    suspend fun fetchRelayListsBatch(pubkeys: List<String>): Map<String, List<String>> = withContext(Dispatchers.IO) {
+        if (pubkeys.isEmpty()) return@withContext emptyMap()
+        val results = mutableMapOf<String, List<String>>()
+        val chunks = pubkeys.chunked(50)
+
+        for (chunk in chunks) {
+            val latch = CountDownLatch(indexerRelays.size)
+            val activeSockets = java.util.Collections.synchronizedList(mutableListOf<okhttp3.WebSocket>())
+            for (url in indexerRelays) {
+                val request = Request.Builder().url(url).build()
+                val listener = object : WebSocketListener() {
+                    val subId = UUID.randomUUID().toString()
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        try {
+                            val filter = JSONObject()
+                            filter.put("kinds", JSONArray().put(10002))
+                            val authors = JSONArray()
+                            chunk.forEach { authors.put(it) }
+                            filter.put("authors", authors)
+                            webSocket.send(JSONArray().put("REQ").put(subId).put(filter).toString())
+                        } catch (_: Exception) { latch.countDown() }
+                    }
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        try {
+                            val json = JSONArray(text)
+                            if (json.optString(0) == "EVENT" && json.optString(1) == subId) {
+                                val event = json.getJSONObject(2)
+                                val pk = event.optString("pubkey")
+                                val tags = event.optJSONArray("tags") ?: return
+                                val relayUrls = mutableListOf<String>()
+                                for (i in 0 until tags.length()) {
+                                    val tag = tags.getJSONArray(i)
+                                    if (tag.length() > 1 && tag.getString(0) == "r") relayUrls.add(tag.getString(1))
+                                }
+                                synchronized(results) { results[pk] = relayUrls }
+                            } else if (json.optString(0) == "EOSE" && json.optString(1) == subId) {
+                                webSocket.close(1000, "Done")
+                                latch.countDown()
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { latch.countDown() }
+                }
+                activeSockets.add(client.newWebSocket(request, listener))
+            }
+            try { latch.await(5, TimeUnit.SECONDS) } catch (_: Exception) {}
+            activeSockets.forEach { try { it.cancel() } catch (_: Exception) {} }
+        }
+        return@withContext results
+    }
+
+    suspend fun checkRelayHealth(url: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val httpUrl = url.trim().removeSuffix("/").replace("wss://", "https://").replace("ws://", "http://")
+            val request = Request.Builder()
+                .url(httpUrl)
+                .header("Accept", "application/nostr+json")
+                .build()
+            client.newCall(request).execute().use { response -> response.isSuccessful }
+        } catch (e: Exception) {
+            try {
+                val latch = CountDownLatch(1)
+                var success = false
+                val ws = client.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        success = true
+                        webSocket.close(1000, "ping")
+                        latch.countDown()
+                    }
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { latch.countDown() }
+                })
+                latch.await(3, TimeUnit.SECONDS)
+                ws.cancel()
+                success
+            } catch (_: Exception) { false }
+        }
     }
 
     fun createBlossomServerListEventJson(pubkey: String, servers: List<String>): String {

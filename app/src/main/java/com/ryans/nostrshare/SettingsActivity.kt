@@ -171,6 +171,15 @@ fun SettingsScreen(
             }
         }
     }
+
+    if (processViewModel.showDeepScanDialog) {
+        com.ryans.nostrshare.ui.DeepScanDialog(
+            onDismiss = { processViewModel.showDeepScanDialog = false },
+            onStartScan = { isDeep ->
+                processViewModel.startHistoryScan(isDeep)
+            }
+        )
+    }
 }
 
 @Composable
@@ -370,8 +379,7 @@ fun NostrSettingsTab(repo: SettingsRepository, pubkey: String?, processViewModel
         val context = androidx.compose.ui.platform.LocalContext.current
         ElevatedButton(
             onClick = { 
-                Toast.makeText(context, "Full sync started...", Toast.LENGTH_SHORT).show()
-                processViewModel.forceFullSync()
+                processViewModel.showDeepScanDialog = true
             },
             enabled = !processViewModel.isFetchingRemoteHistory,
             modifier = Modifier.fillMaxWidth()

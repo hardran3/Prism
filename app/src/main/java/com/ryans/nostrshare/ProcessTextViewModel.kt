@@ -726,6 +726,7 @@ class ProcessTextViewModel : ViewModel() {
                 relayManager.fetchHistoryFromRelays(
                     currentPk,
                     kinds,
+                    null,
                     searchTerm,
                     null,
                     null,
@@ -1996,6 +1997,18 @@ class ProcessTextViewModel : ViewModel() {
     var showDraftsHistory by mutableStateOf(false)
     var isVisualMode by mutableStateOf(false)
     var isDraftMonitoringActive by mutableStateOf(false)
+    var showDeepScanDialog by mutableStateOf(false)
+
+    fun startHistoryScan(isDeep: Boolean) {
+        val pk = pubkey ?: return
+        com.ryans.nostrshare.utils.DeepScanManager.startDeepScan(
+            pk,
+            relayManager,
+            draftDao,
+            viewModelScope,
+            isDeep
+        )
+    }
 
     fun clearContent() {
         contentValue = TextFieldValue("")

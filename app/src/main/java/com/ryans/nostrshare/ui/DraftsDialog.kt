@@ -254,7 +254,13 @@ fun DraftsHistoryList(
                     Column(Modifier.padding(12.dp)) {
                         Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Text("Full History", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                            Switch(checked = vm.isFullHistoryEnabled, onCheckedChange = { vm.toggleFullHistory() }, modifier = Modifier.scale(0.8f))
+                            Switch(checked = vm.isFullHistoryEnabled, onCheckedChange = { 
+                                val wasEnabled = vm.isFullHistoryEnabled
+                                vm.toggleFullHistory()
+                                if (!wasEnabled && vm.isFullHistoryEnabled && history.isEmpty()) {
+                                    vm.showDeepScanDialog = true
+                                }
+                            }, modifier = Modifier.scale(0.8f))
                         }
                         OutlinedTextField(
                             value = vm.searchQuery, 
@@ -337,6 +343,15 @@ fun DraftsHistoryList(
         }
 
         showMediaDetail?.let { item -> MediaDetailDialog(item = item, vm = vm, onDismiss = { showMediaDetail = null }) }
+
+        if (vm.showDeepScanDialog) {
+            DeepScanDialog(
+                onDismiss = { vm.showDeepScanDialog = false },
+                onStartScan = { isDeep ->
+                    vm.startHistoryScan(isDeep)
+                }
+            )
+        }
     }
 }
 
