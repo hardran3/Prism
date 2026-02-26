@@ -61,8 +61,7 @@ class ScheduledNoteWorker(
     }
 
     private fun createProgressNotification(): android.app.Notification {
-        createNotificationChannel()
-        return NotificationCompat.Builder(applicationContext, CHANNEL_ID_PROGRESS)
+        return NotificationCompat.Builder(applicationContext, NotificationHelper.CHANNEL_ID_PROGRESS)
             .setContentTitle("Publishing Scheduled Note")
             .setTicker("Publishing Scheduled Note")
             .setContentText("Broadcasting to relays...")
@@ -126,7 +125,6 @@ class ScheduledNoteWorker(
         val settingsRepository = SettingsRepository(app)
         val relayManager = RelayManager(app.client, settingsRepository)
 
-        createNotificationChannel()
         NotificationHelper.createNotificationChannel(applicationContext)
 
         try {
@@ -226,38 +224,6 @@ class ScheduledNoteWorker(
         }
     }
 
-    private fun createNotificationChannel() {
-        val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        
-        // 1. Delete old channel
-        notificationManager.deleteNotificationChannel("scheduled_posts")
-
-        // 2. Create Progress Channel (Silent)
-        val progressName = "Active Posting"
-        val progressDesc = "Shows status of notes being sent"
-        val progressChannel = NotificationChannel(CHANNEL_ID_PROGRESS, progressName, NotificationManager.IMPORTANCE_LOW).apply {
-            description = progressDesc
-            setShowBadge(false)
-        }
-        notificationManager.createNotificationChannel(progressChannel)
-
-        // 3. Create Alerts Channel (Sound)
-        val alertsName = "Scheduled Posts"
-        val alertsDesc = "Notifications for successfully published notes"
-        val soundUri = Uri.parse("android.resource://${applicationContext.packageName}/raw/prism_notification")
-        
-        val audioAttributes = AudioAttributes.Builder()
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-            .build()
-
-        val alertsChannel = NotificationChannel(CHANNEL_ID_ALERTS, alertsName, NotificationManager.IMPORTANCE_DEFAULT).apply {
-            description = alertsDesc
-            setSound(soundUri, audioAttributes)
-        }
-        notificationManager.createNotificationChannel(alertsChannel)
-    }
-
     private suspend fun showNotification(success: Boolean, draft: Draft? = null, eventId: String? = null) {
         val title: String
         val message: String
@@ -348,12 +314,12 @@ class ScheduledNoteWorker(
                 }
             }
 
-            val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID_ALERTS)
+            val builder = NotificationCompat.Builder(applicationContext, NotificationHelper.CHANNEL_ID_ALERTS)
                 .setSmallIcon(com.ryans.nostrshare.R.drawable.ic_notification_prism)
                 .setContentTitle(title)
                 .setContentText(message)
                 .setLargeIcon(avatarBitmap)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setGroup(GROUP_KEY_SUCCESS)
                 .setAutoCancel(true)
 
@@ -382,10 +348,10 @@ class ScheduledNoteWorker(
     }
 
     private fun showSummaryNotification() {
-        val summaryBuilder = NotificationCompat.Builder(applicationContext, CHANNEL_ID_ALERTS)
+        val summaryBuilder = NotificationCompat.Builder(applicationContext, NotificationHelper.CHANNEL_ID_ALERTS)
             .setSmallIcon(com.ryans.nostrshare.R.drawable.ic_notification_prism)
             .setContentTitle("Prism Sent Notes")
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setGroup(GROUP_KEY_SUCCESS)
             .setGroupSummary(true)
             .setAutoCancel(true)

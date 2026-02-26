@@ -24,10 +24,15 @@ import kotlinx.coroutines.withContext
 
 object NotificationHelper {
 
+    // Functional Channels (Internal IDs)
     const val CHANNEL_ID_SCHEDULE = "prism_scheduler"
-    const val CHANNEL_ID_SYNC = "prism_sync" // New channel for sync
+    const val CHANNEL_ID_SYNC = "prism_sync"
+    const val CHANNEL_ID_PROGRESS = "scheduled_progress"
+    const val CHANNEL_ID_ALERTS = "prism_alerts_v2" // Updated to v2 to force sound fix
+
     const val NOTIFICATION_ID_SCHEDULED_STATUS = 1001
-    const val NOTIFICATION_ID_SYNC = 1002 // New ID for sync notification
+    const val NOTIFICATION_ID_SYNC = 1002
+    const val NOTIFICATION_ID_PROGRESS = 1003
     const val SUMMARY_ID = 1000
     const val GROUP_KEY_SCHEDULED = "com.ryans.nostrshare.SCHEDULED_NOTES"
 
@@ -35,25 +40,62 @@ object NotificationHelper {
         val notificationManager: NotificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // Scheduler Channel
-        val name = "Prism Scheduler"
-        val descriptionText = "Notifications for pending scheduled posts"
-        val importance = NotificationManager.IMPORTANCE_LOW 
-        val channel = NotificationChannel(CHANNEL_ID_SCHEDULE, name, importance).apply {
-            description = descriptionText
+        // 1. Spring Cleaning: Delete old, messy channel IDs to clean up system settings
+        val oldChannelIds = listOf("scheduled_posts", "scheduled_alerts_v2", "scheduled_alerts_v3", "prism_alerts_v1")
+        oldChannelIds.forEach { id ->
+            notificationManager.deleteNotificationChannel(id)
+        }
+
+        // 2. Scheduler Status Channel (Silent)
+        val schedulerChannel = NotificationChannel(
+            CHANNEL_ID_SCHEDULE, 
+            "Scheduler Status", 
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Shows pending scheduled notes count"
             setShowBadge(false)
         }
-        notificationManager.createNotificationChannel(channel)
+        notificationManager.createNotificationChannel(schedulerChannel)
 
-        // Sync Channel
-        val syncName = "Prism Sync"
-        val syncDescription = "Progress of Nostr history synchronization"
-        val syncImportance = NotificationManager.IMPORTANCE_LOW
-        val syncChannel = NotificationChannel(CHANNEL_ID_SYNC, syncName, syncImportance).apply {
-            description = syncDescription
+        // 3. Sync Progress Channel (Silent)
+        val syncChannel = NotificationChannel(
+            CHANNEL_ID_SYNC, 
+            "History Sync", 
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Progress of Nostr history synchronization"
             setShowBadge(false)
         }
         notificationManager.createNotificationChannel(syncChannel)
+
+        // 4. Active Posting Channel (Silent - Required for Foreground Service)
+        val progressChannel = NotificationChannel(
+            CHANNEL_ID_PROGRESS, 
+            "Active Posting", 
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Shows status of notes currently being sent"
+            setShowBadge(false)
+        }
+        notificationManager.createNotificationChannel(progressChannel)
+
+        // 5. Alerts Channel (SOUND - Fixed URI using direct resource ID)
+        val soundUri = android.net.Uri.parse("android.resource://" + context.packageName + "/" + com.ryans.nostrshare.R.raw.prism_notification)
+        val audioAttributes = android.media.AudioAttributes.Builder()
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+            .build()
+
+        val alertsChannel = NotificationChannel(
+            CHANNEL_ID_ALERTS, 
+            "Alerts", 
+            NotificationManager.IMPORTANCE_HIGH // High importance forces sound and heads-up
+        ).apply {
+            description = "Notifications for successfully published notes"
+            setSound(soundUri, audioAttributes)
+            enableVibration(true)
+        }
+        notificationManager.createNotificationChannel(alertsChannel)
     }
 
     fun showSyncProgressNotification(context: Context, relayUrl: String, current: Int, total: Int, isCompleted: Boolean = false) {
