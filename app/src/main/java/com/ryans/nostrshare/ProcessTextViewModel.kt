@@ -1355,7 +1355,17 @@ class ProcessTextViewModel : ViewModel() {
     var mediaItems = mutableStateListOf<MediaUploadState>()
     var processedMediaUris = mutableMapOf<String, Uri>()
     
-    var showSharingDialog by mutableStateOf(false)
+    private var _showSharingDialog = mutableStateOf(false)
+    var showSharingDialog: Boolean
+        get() = _showSharingDialog.value
+        set(value) {
+            if (value && !_showSharingDialog.value) {
+                // Reset state to defaults every time dialog opens
+                _batchCompressionLevel.value = settingsRepository.getCompressionLevel()
+                blossomServers = settingsRepository.getBlossomServers(pubkey)
+            }
+            _showSharingDialog.value = value
+        }
     var isBatchUploading by mutableStateOf(false)
     var batchUploadStatus by mutableStateOf("")
 

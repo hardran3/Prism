@@ -48,6 +48,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.foundation.text.KeyboardOptions
 import android.net.Uri
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.withStyle
 import coil.compose.AsyncImage
@@ -104,7 +106,7 @@ class ProcessTextActivity : ComponentActivity() {
         }
     }
 
-    private val pickMediaLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
+    private val pickMediaLauncher = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris: List<Uri> ->
         if (uris.isNotEmpty()) viewModel.onMediaSelected(this, uris)
     }
 
@@ -345,7 +347,7 @@ class ProcessTextActivity : ComponentActivity() {
                                 }
                                 Spacer(Modifier.weight(1f))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    FloatingActionButton(onClick = { pickMediaLauncher.launch("image/* video/*") }, containerColor = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.AddPhotoAlternate, null, modifier = Modifier.size(20.dp)) }
+                                    FloatingActionButton(onClick = { pickMediaLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }, containerColor = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.AddPhotoAlternate, null, modifier = Modifier.size(20.dp)) }
                                     Spacer(Modifier.width(8.dp))
                                     FloatingActionButton(onClick = { vm.showUserSearchDialog = true }, containerColor = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.PersonAdd, null, modifier = Modifier.size(20.dp)) }
                                     Spacer(Modifier.width(16.dp))
@@ -476,7 +478,7 @@ class ProcessTextActivity : ComponentActivity() {
                             Spacer(Modifier.height(8.dp))
                             androidx.compose.foundation.lazy.LazyRow(modifier = Modifier.fillMaxWidth().height(100.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 items(vm.mediaItems.size) { i -> val item = vm.mediaItems[i]; MediaThumbnail(item = item, onClick = { if (item.uploadedUrl != null) showMediaDetail = item else vm.showSharingDialog = true }, onRemove = { vm.mediaItems.remove(item) }) }
-                                item { Box(Modifier.size(100.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).clickable { pickMediaLauncher.launch("image/* video/*") }, contentAlignment = Alignment.Center) { Icon(Icons.Default.AddPhotoAlternate, null, tint = MaterialTheme.colorScheme.primary) } }
+                                item { Box(Modifier.size(100.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).clickable { pickMediaLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }, contentAlignment = Alignment.Center) { Icon(Icons.Default.AddPhotoAlternate, null, tint = MaterialTheme.colorScheme.primary) } }
                             }
                         }
                     }
@@ -813,28 +815,37 @@ fun SharingDialog(vm: ProcessTextViewModel, onDismiss: () -> Unit) {
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
-                Text("Image Compression", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(8.dp))
-                
-                // Compression: FilterChips (None, Balanced, High)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val levels = listOf(
-                        SettingsRepository.COMPRESSION_NONE to "None",
-                        SettingsRepository.COMPRESSION_MEDIUM to "Balanced",
-                        SettingsRepository.COMPRESSION_HIGH to "High"
+                val hasImages = vm.mediaItems.any { it.mimeType?.startsWith("image/") == true }
+                val hasVideos = vm.mediaItems.any { it.mimeType?.startsWith("video/") == true }
+
+                if (hasImages) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        if (hasVideos) "Image Compression (photos only)" else "Image Compression",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
                     )
+                    Spacer(Modifier.height(8.dp))
                     
-                    levels.forEach { (level, label) ->
-                        FilterChip(
-                            selected = vm.batchCompressionLevel == level,
-                            onClick = { vm.batchCompressionLevel = level },
-                            label = { Text(label) },
-                            modifier = Modifier.weight(1f)
+                    // Compression: FilterChips (None, Balanced, High)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val levels = listOf(
+                            SettingsRepository.COMPRESSION_NONE to "None",
+                            SettingsRepository.COMPRESSION_MEDIUM to "Balanced",
+                            SettingsRepository.COMPRESSION_HIGH to "High"
                         )
+                        
+                        levels.forEach { (level, label) ->
+                            FilterChip(
+                                selected = vm.batchCompressionLevel == level,
+                                onClick = { vm.updateBatchCompressionLevel(context, level) },
+                                label = { Text(label) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
 

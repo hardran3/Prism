@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DraftDao {
-    @Query("SELECT * FROM drafts WHERE isScheduled = 0 AND isAutoSave = 0 AND isRemoteCache = 0 AND pubkey = :pubkey ORDER BY lastEdited DESC")
+    @Query("SELECT * FROM drafts WHERE isScheduled = 0 AND isAutoSave = 0 AND isRemoteCache = 0 AND isCompleted = 0 AND pubkey = :pubkey ORDER BY lastEdited DESC")
     fun getAllDrafts(pubkey: String?): Flow<List<Draft>>
 
     @Query("SELECT * FROM drafts WHERE isScheduled = 1 AND isCompleted = 0 AND isRemoteCache = 0 AND pubkey = :pubkey ORDER BY isOfflineRetry DESC, scheduledAt ASC")
