@@ -20,11 +20,9 @@ interface DraftDao {
     @Query("""
         SELECT * FROM drafts 
         WHERE pubkey = :pubkey 
-        AND (
-            (isScheduled = 1 AND isCompleted = 1) 
-            OR (:includeRemote = 1 AND isRemoteCache = 1 AND isScheduled = 0)
-        )
-        ORDER BY CASE WHEN isRemoteCache = 1 THEN IFNULL(actualPublishedAt, lastEdited) ELSE IFNULL(scheduledAt, lastEdited) END DESC
+        AND isCompleted = 1 
+        AND (isRemoteCache = 0 OR :includeRemote = 1)
+        ORDER BY IFNULL(actualPublishedAt, lastEdited) DESC
     """)
     fun getUnifiedHistory(pubkey: String, includeRemote: Int): Flow<List<Draft>>
 
@@ -100,8 +98,7 @@ interface DraftDao {
             previewDescription = :previewDescription,
             previewImageUrl = :previewImageUrl,
             previewSiteName = :previewSiteName,
-            mediaJson = :mediaJson,
-            isRemoteCache = 1
+            mediaJson = :mediaJson
         WHERE id = :id AND pubkey = :pubkey
     """)
     suspend fun updateRemoteMetadata(

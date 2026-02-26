@@ -774,7 +774,14 @@ class ProcessTextViewModel : ViewModel() {
     var uploadedMediaUrl by mutableStateOf<String?>(null)
     var uploadedMediaHash by mutableStateOf<String?>(null)
     var uploadedMediaSize by mutableStateOf<Long?>(null)
-    var batchCompressionLevel by mutableStateOf<Int?>(null)
+    
+    private var _batchCompressionLevel = mutableStateOf<Int?>(null)
+    var batchCompressionLevel: Int?
+        get() = _batchCompressionLevel.value
+        set(value) {
+            _batchCompressionLevel.value = value
+            if (value != null) settingsRepository.setCompressionLevel(value)
+        }
 
     init {
         // Multi-user isolation: Clean up any notes without an assigned pubkey
@@ -787,7 +794,7 @@ class ProcessTextViewModel : ViewModel() {
         
         isOnboarded = settingsRepository.isOnboarded(savedPubkey)
         isSchedulingEnabled = settingsRepository.isSchedulingEnabled()
-        batchCompressionLevel = settingsRepository.getCompressionLevel()
+        _batchCompressionLevel.value = settingsRepository.getCompressionLevel()
         
         knownAccounts.addAll(settingsRepository.getKnownAccounts())
         
@@ -901,19 +908,48 @@ class ProcessTextViewModel : ViewModel() {
         if (pk != null) settingsRepository.setOnboarded(false, pk)
     }
 
+    private fun resetEditorState() {
+        contentValue = TextFieldValue("")
+        sourceUrl = ""
+        mediaUri = null
+        mediaMimeType = null
+        uploadedMediaUrl = null
+        uploadedMediaHash = null
+        uploadedMediaSize = null
+        postKind = PostKind.NOTE
+        mediaItems.clear()
+        mediaTitle = ""
+        articleTitle = ""
+        articleSummary = ""
+        articleIdentifier = null
+        currentDraftId = null
+        highlightEventId = null
+        highlightAuthor = null
+        highlightKind = null
+        highlightIdentifier = null
+        highlightRelays.clear()
+        originalEventJson = null
+    }
+
     fun switchUser(hexKey: String) {
         if (pubkey == hexKey) return
         
+        // 1. Save current state for User A before switching
+        if (isDraftMonitoringActive) saveDraft()
+        
         HistorySyncManager.reset()
         
-        // Clear search and filters to prevent stale data visibility
+        // 2. Clear search and editor filters
         searchQuery = ""
         activeHistoryFilters.clear()
         activeHashtags.clear()
         
+        // 3. Reset Editor State to prevent User A's text from leaking to User B
+        resetEditorState()
+        
         val account = knownAccounts.find { it.pubkey == hexKey }
         
-        // Reset state for new user
+        // 4. Reset state for new user
         pubkey = hexKey
         npub = account?.npub
         signerPackageName = account?.signerPackage
@@ -934,11 +970,25 @@ class ProcessTextViewModel : ViewModel() {
             .putLong("${hexKey}_user_created_at", userProfile?.createdAt ?: 0L)
             .apply()
         
+        // 5. Restore user-specific settings
         blossomServers = settingsRepository.getBlossomServers(hexKey)
         isFullHistoryEnabled = settingsRepository.isFullHistoryEnabled(hexKey)
         hasReachedEndOfRemoteHistory = settingsRepository.isHistorySyncCompleted(hexKey)
         
+        // RESTORED: User-specific global settings
+        isSchedulingEnabled = settingsRepository.isSchedulingEnabled()
+        _batchCompressionLevel.value = settingsRepository.getCompressionLevel()
+        followedPubkeys = settingsRepository.getFollowedPubkeys(hexKey)
+        
         refreshUserProfile()
+        
+        // 6. Check for Auto-save for User B
+        viewModelScope.launch {
+            val autoDraft = draftDao.getAutoSaveDraft(hexKey)
+            if (autoDraft != null) {
+                showDraftPrompt = true
+            }
+        }
     }
     
 
@@ -988,7 +1038,7 @@ class ProcessTextViewModel : ViewModel() {
                 if (pubkey != pk) return@launch
                 
                 followedPubkeys = follows
-                settingsRepository.setFollowedPubkeys(follows)
+                settingsRepository.setFollowedPubkeys(follows, pk)
                 
                 if (follows.isNotEmpty()) {
                     val followsList = follows.toList()
@@ -2111,9 +2161,10 @@ class ProcessTextViewModel : ViewModel() {
     }
 
     fun loadDraftById(id: Int) {
+        val pk = pubkey ?: return
         viewModelScope.launch {
             val draft = draftDao.getDraftById(id)
-            if (draft != null) {
+            if (draft != null && draft.pubkey == pk) {
                 loadDraft(draft)
             }
         }

@@ -485,7 +485,12 @@ class ProcessTextActivity : ComponentActivity() {
                     showMediaDetail?.let { item -> MediaDetailDialog(item = item, vm = vm, onDismiss = { showMediaDetail = null }) }
                     if (vm.showSharingDialog) SharingDialog(vm = vm, onDismiss = { vm.showSharingDialog = false })
                     if (showDatePicker) { val ds = rememberDatePickerState(initialSelectedDateMillis = System.currentTimeMillis()); DatePickerDialog(onDismissRequest = { showDatePicker = false }, confirmButton = { TextButton(onClick = { showDatePicker = false; showTimePicker = true; tempDateMillis = ds.selectedDateMillis }) { Text("Next") } }) { DatePicker(state = ds) } }
-                    if (showTimePicker) { val ts = rememberTimePickerState(); AlertDialog(onDismissRequest = { showTimePicker = false }, confirmButton = { TextButton(onClick = { val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { timeInMillis = tempDateMillis ?: System.currentTimeMillis() }; val cal = java.util.Calendar.getInstance().apply { set(utc.get(java.util.Calendar.YEAR), utc.get(java.util.Calendar.MONTH), utc.get(java.util.Calendar.DAY_OF_MONTH), ts.hour, ts.minute, 0) }; if (cal.timeInMillis <= System.currentTimeMillis()) Toast.makeText(this@ProcessTextActivity, "Pick future time", Toast.LENGTH_SHORT).show() else checkExactAlarmAndSchedule(cal.timeInMillis); showTimePicker = false }) { Text("Schedule") } }, title = { Text("Select Time") }, text = { TimePicker(state = ts) }) }
+                    if (showTimePicker) { 
+                        val now = java.util.Calendar.getInstance()
+                        now.add(java.util.Calendar.MINUTE, 1)
+                        val ts = rememberTimePickerState(initialHour = now.get(java.util.Calendar.HOUR_OF_DAY), initialMinute = now.get(java.util.Calendar.MINUTE))
+                        AlertDialog(onDismissRequest = { showTimePicker = false }, confirmButton = { TextButton(onClick = { val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { timeInMillis = tempDateMillis ?: System.currentTimeMillis() }; val cal = java.util.Calendar.getInstance().apply { set(utc.get(java.util.Calendar.YEAR), utc.get(java.util.Calendar.MONTH), utc.get(java.util.Calendar.DAY_OF_MONTH), ts.hour, ts.minute, 0) }; if (cal.timeInMillis <= System.currentTimeMillis()) Toast.makeText(this@ProcessTextActivity, "Pick future time", Toast.LENGTH_SHORT).show() else checkExactAlarmAndSchedule(cal.timeInMillis); showTimePicker = false }) { Text("Schedule") } }, title = { Text("Select Time") }, text = { TimePicker(state = ts) }) 
+                    }
                     if (vm.showDraftsHistory) DraftsDialog(vm = vm, onDismiss = { vm.showDraftsHistory = false }, onEditAndReschedule = { d -> vm.showDraftsHistory = false; vm.loadDraftById(d.id) }, onSaveToDrafts = {}, onOpenInClient = { note ->
                         val targetId = if (note.kind == 6 || note.kind == 16) {
                             NostrUtils.getTargetEventIdFromRepost(note.originalEventJson ?: "") ?: note.id
@@ -789,6 +794,50 @@ fun SharingDialog(vm: ProcessTextViewModel, onDismiss: () -> Unit) {
                 androidx.compose.foundation.lazy.LazyRow(Modifier.fillMaxWidth().height(100.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(vm.mediaItems.size) { i -> val item = vm.mediaItems[i]; Box(Modifier.size(100.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) { if (item.mimeType?.startsWith("image/") == true) AsyncImage(model = item.uri, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) else Icon(Icons.Default.PlayArrow, null, Modifier.align(Alignment.Center)); if (item.uploadedUrl != null) Box(Modifier.align(Alignment.BottomEnd).padding(4.dp).size(20.dp).clip(CircleShape).background(Color(0xFF4CAF50)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(14.dp)) } else if (item.isUploading) CircularProgressIndicator(modifier = Modifier.align(Alignment.Center).size(24.dp)) } }
                 }
+                
+                Spacer(Modifier.height(24.dp))
+                Text("Upload To", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(8.dp))
+                
+                // Server Selection: List with Checkboxes
+                androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+                    items(vm.blossomServers.size) { i ->
+                        val server = vm.blossomServers[i]
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().clickable { vm.toggleBlossomServer(server.url) }
+                        ) {
+                            Checkbox(checked = server.enabled, onCheckedChange = { vm.toggleBlossomServer(server.url) })
+                            Text(server.url.removePrefix("https://"), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Text("Image Compression", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(8.dp))
+                
+                // Compression: FilterChips (None, Balanced, High)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val levels = listOf(
+                        SettingsRepository.COMPRESSION_NONE to "None",
+                        SettingsRepository.COMPRESSION_MEDIUM to "Balanced",
+                        SettingsRepository.COMPRESSION_HIGH to "High"
+                    )
+                    
+                    levels.forEach { (level, label) ->
+                        FilterChip(
+                            selected = vm.batchCompressionLevel == level,
+                            onClick = { vm.batchCompressionLevel = level },
+                            label = { Text(label) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss, enabled = !vm.isBatchUploading) { Text("Cancel") }

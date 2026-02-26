@@ -489,7 +489,12 @@ fun HistoryList(history: List<HistoryUiModel>, vm: ProcessTextViewModel, isFetch
 
         if (showTimePicker) {
             val now = java.util.Calendar.getInstance()
-            val ts = rememberTimePickerState(initialHour = now.get(java.util.Calendar.HOUR_OF_DAY), initialMinute = now.get(java.util.Calendar.MINUTE))
+            // Default to 1 hour in the future
+            now.add(java.util.Calendar.HOUR_OF_DAY, 1)
+            val ts = rememberTimePickerState(
+                initialHour = now.get(java.util.Calendar.HOUR_OF_DAY), 
+                initialMinute = now.get(java.util.Calendar.MINUTE)
+            )
             AlertDialog(
                 onDismissRequest = { showTimePicker = false },
                 confirmButton = {
@@ -600,59 +605,14 @@ fun UnifiedPostItem(note: HistoryUiModel, vm: ProcessTextViewModel, onMediaClick
                                     if (note.kind == 6 || note.kind == 16) "" else note.contentSnippet 
                                 }
                                 
-                                var linkMeta: com.ryans.nostrshare.utils.LinkMetadata? = null
-                                if (!note.previewTitle.isNullOrBlank() || !note.previewImageUrl.isNullOrBlank()) {
-                                    linkMeta = com.ryans.nostrshare.utils.LinkMetadata(url = note.sourceUrl ?: "", title = note.previewTitle, description = note.previewDescription, imageUrl = note.previewImageUrl, siteName = note.previewSiteName)
-                                }
-                                
-                                // Lazy Resolution: Move JSON parsing from background flow to row-level UI
-                                val resolvedState = remember(note.id, note.originalEventJson, note.contentSnippet) {
-                                    var targetJson: JSONObject? = null
-                                    var detectedLink: String? = null
-                                    
-                                    val rootJson = note.originalEventJson?.let { 
-                                        try { JSONObject(it) } catch (_: Exception) { null } 
-                                    }
-
-                                    when {
-                                        note.kind == 6 || note.kind == 16 -> {
-                                            targetJson = rootJson
-                                            if (targetJson == null && note.contentSnippet.trim().startsWith("{")) {
-                                                targetJson = try { JSONObject(note.contentSnippet) } catch (_: Exception) { null }
-                                            }
-                                            if (note.sourceUrl?.isNotBlank() == true) {
-                                                detectedLink = note.sourceUrl.removePrefix("nostr:")
-                                            }
-                                        }
-                                        note.isQuote -> {
-                                            val regex = "(nostr:)?(nevent1|note1|naddr1)[a-z0-9]+".toRegex(RegexOption.IGNORE_CASE)
-                                            val match = regex.find(note.contentSnippet) ?: note.sourceUrl?.let { regex.find(it) }
-                                            detectedLink = match?.value?.removePrefix("nostr:")
-                                            targetJson = rootJson
-                                        }
-                                        else -> {
-                                            targetJson = rootJson
-                                        }
-                                    }
-                                    
-                                    // Self-preview suppression
-                                    if (note.publishedEventId != null) {
-                                        if (targetJson?.optString("id") == note.publishedEventId) targetJson = null
-                                        val entity = detectedLink?.let { com.ryans.nostrshare.NostrUtils.findNostrEntity(it) }
-                                        if (entity?.id == note.publishedEventId) detectedLink = null
-                                    }
-                                    
-                                    targetJson to detectedLink
-                                }
-
                                 IntegratedContent(
                                     content = contentToRender, 
                                     vm = vm, 
                                     onMediaClick = onMediaClick, 
-                                    mediaItems = parseMediaJson(note.mediaJson), 
-                                    linkMetadata = linkMeta, 
-                                    nostrEvent = resolvedState.first, 
-                                    targetLink = resolvedState.second,
+                                    mediaItems = note.mediaItems, 
+                                    linkMetadata = note.linkMetadata, 
+                                    nostrEvent = note.nostrEvent, 
+                                    targetLink = note.targetLink,
                                     isHighlight = note.kind == 9802,
                                     sourceUrl = note.sourceUrl,
                                     kind = note.kind

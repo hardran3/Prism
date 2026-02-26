@@ -31,8 +31,21 @@ class SettingsRepository(appContext: Context) {
     )
 
     fun isOnboarded(pubkey: String? = null): Boolean {
-        val key = if (pubkey != null) "${pubkey}_onboarded_completed" else "onboarded_completed"
-        return prefs.getBoolean(key, false)
+        if (pubkey != null) {
+            val userKey = "${pubkey}_onboarded_completed"
+            if (prefs.contains(userKey)) {
+                return prefs.getBoolean(userKey, false)
+            }
+        }
+        // Fallback to legacy global key for existing users
+        val legacyOnboarded = prefs.getBoolean("onboarded_completed", false)
+        
+        // Auto-migrate to new format if we found a legacy user
+        if (legacyOnboarded && pubkey != null) {
+            setOnboarded(true, pubkey)
+        }
+        
+        return legacyOnboarded
     }
 
     fun setOnboarded(onboarded: Boolean, pubkey: String? = null) {
@@ -167,12 +180,14 @@ class SettingsRepository(appContext: Context) {
         return getBlossomServers(pubkey).filter { it.enabled }.map { it.url }
     }
 
-    fun getFollowedPubkeys(): Set<String> {
-        return prefs.getStringSet("followed_pubkeys", emptySet()) ?: emptySet()
+    fun getFollowedPubkeys(pubkey: String? = null): Set<String> {
+        val key = if (pubkey != null) "${pubkey}_followed_pubkeys" else "followed_pubkeys"
+        return prefs.getStringSet(key, emptySet()) ?: emptySet()
     }
 
-    fun setFollowedPubkeys(pubkeys: Set<String>) {
-        prefs.edit().putStringSet("followed_pubkeys", pubkeys).apply()
+    fun setFollowedPubkeys(pubkeys: Set<String>, pubkey: String? = null) {
+        val key = if (pubkey != null) "${pubkey}_followed_pubkeys" else "followed_pubkeys"
+        prefs.edit().putStringSet(key, pubkeys).apply()
     }
 
     fun getUsernameCache(): Map<String, UserProfile> {

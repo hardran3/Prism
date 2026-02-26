@@ -21,7 +21,7 @@ class NostrShareApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         client = OkHttpClient.Builder()
-            .cache(okhttp3.Cache(File(cacheDir, "http_cache"), 50L * 1024 * 1024))
+            .cache(okhttp3.Cache(File(cacheDir, "http_cache"), 100L * 1024 * 1024)) // 100MB HTTP Cache
             .build()
         database = com.ryans.nostrshare.data.DraftDatabase.getDatabase(this)
         com.ryans.nostrshare.utils.NotificationHelper.createNotificationChannel(this)
@@ -38,7 +38,7 @@ class NostrShareApp : Application(), ImageLoaderFactory {
             .diskCache {
                 coil.disk.DiskCache.Builder()
                     .directory(cacheDir.resolve("avatar_cache"))
-                    .maxSizeBytes(20L * 1024 * 1024) // 20MB dedicated for avatars
+                    .maxSizeBytes(100L * 1024 * 1024) // 100MB dedicated for avatars
                     .build()
             }
             .crossfade(true)
@@ -58,7 +58,7 @@ class NostrShareApp : Application(), ImageLoaderFactory {
             .diskCache {
                 coil.disk.DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(100L * 1024 * 1024) // 100MB Limit
+                    .maxSizeBytes(800L * 1024 * 1024) // 800MB Media Cache
                     .build()
             }
             .crossfade(true)
